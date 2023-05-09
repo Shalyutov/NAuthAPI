@@ -32,16 +32,16 @@ namespace NAuthAPI.Controllers
     [ApiController]
     public class AuthController : ControllerBase
     {
-        readonly YdbContext database;
-        readonly string pepper;
+        readonly YdbContext _database;
+        readonly string _pepper;
         public AuthController(IConfiguration webconfig, YdbContext db)
         {
-            database = db;
-            pepper = webconfig["Pepper"] ?? "";
+            _database = db;
+            _pepper = webconfig["Pepper"] ?? "";
         }
         private bool IsDBInitialized()
         {
-            if (database != null)
+            if (_database != null)
             {
                 return true;
             }
@@ -50,15 +50,13 @@ namespace NAuthAPI.Controllers
                 return false;
             }
         }
-        [Authorize]
         [HttpGet("db/status")]
         public ActionResult DatabaseStatus()
         {
-            var auth = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
             if (!IsDBInitialized())
                 return Problem("Драйвер базы данных не инициализирован");
             else
-                return Ok($"Драйвер базы данных успешно запущен. Пользователь: {auth}");
+                return Ok("Драйвер базы данных успешно запущен.");
         }
         [HttpPost("signin")]
         public async Task<ActionResult> SignIn([FromForm] string username, [FromForm] string password, [FromForm] string client_id, [FromForm] string client_secret)//add client validation
@@ -72,7 +70,7 @@ namespace NAuthAPI.Controllers
 
             try
             {
-                Account? account = await database.GetAccount(username);
+                Account? account = await _database.GetAccount(username);
                 if (account == null)
                 {
                     return Unauthorized("Неправильный логин или пароль");
@@ -84,7 +82,7 @@ namespace NAuthAPI.Controllers
                     if (IsHashValid(hash, account.Hash))
                     {
                         var key = await CreateSecurityKey();
-                        var isKeyRegistered = await database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid ?? "");
+                        var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid ?? "");
                         if (isKeyRegistered)
                         {
                             var id = CreateIdToken(account.Identity.Claims, key);
@@ -118,7 +116,7 @@ namespace NAuthAPI.Controllers
                 return Forbid("Неверные данные клиентского приложения");
             try
             {
-                bool? exist = await database.IsUsernameExists(username);
+                bool? exist = await _database.IsUsernameExists(username);
                 if (exist == null)
                 {
                     return NoContent();
@@ -126,6 +124,31 @@ namespace NAuthAPI.Controllers
                 else
                 {
                     return Ok(exist);
+                }
+            }
+            catch (Exception ex)
+            {
+                return Problem(ex.Message);
+            }
+        }
+        [Authorize]
+        [HttpGet("account")]
+        public async Task<ActionResult> GetAccount([FromForm] string client_id, [FromForm] string client_secret)
+        {
+            if (!IsDBInitialized())
+                return Problem("Драйвер базы данных не инициализирован");
+            if (client_id != "NAUTH" || client_secret != "758694321")
+                return Forbid("Неверные данные клиентского приложения");
+            try
+            {
+                Account? account = await _database.GetAccount(HttpContext.User.FindFirst(ClaimTypes.Upn)?.Value ?? "");
+                if (account != null)
+                {
+                    return Ok(account.Identity.Claims);
+                }
+                else
+                {
+                    return NoContent();
                 }
             }
             catch (Exception ex)
@@ -159,9 +182,9 @@ namespace NAuthAPI.Controllers
             Account account = new(identity, hash, Convert.ToBase64String(salt));
 
             var key = await CreateSecurityKey();
-            var isKeyRegistered = await database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid);
+            var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid);
 
-            var isAccountCreated = await database.CreateAccount(account);
+            var isAccountCreated = await _database.CreateAccount(account);
             if (isAccountCreated)
             {
                 if (isKeyRegistered)
@@ -197,14 +220,14 @@ namespace NAuthAPI.Controllers
             var token_name = auth.Principal?.FindFirstValue("token") ?? "";
             if (token_name == "refresh")
             {
-                var isValid = await database.IsKeyValid(id);
+                var isValid = await _database.IsKeyValid(id);
                 if (isValid)
                 {
                     DeleteSecurityKey(id);
-                    await database.DeleteAuthKey(id);
+                    await _database.DeleteAuthKey(id);
                     var key = await CreateSecurityKey();
                     string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                    await database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid);
+                    await _database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid);
                     string access = CreateAccessToken(guid, key, "user");
                     string refresh = CreateRefreshToken(guid, key);
                     var result = new
@@ -234,7 +257,7 @@ namespace NAuthAPI.Controllers
             try
             {
                 DeleteSecurityKey(kid);
-                await database.DeleteAuthKey(kid);
+                await _database.DeleteAuthKey(kid);
                 return Ok();
             }
             catch (Exception)
@@ -251,9 +274,9 @@ namespace NAuthAPI.Controllers
                 return Problem("Драйвер базы данных не инициализирован");
             try
             {
-                var keys = await database.GetUserKeys(user);
+                var keys = await _database.GetUserKeys(user);
                 foreach (var key in keys) DeleteSecurityKey(key);
-                await database.DeleteUserAuthKeys(user);
+                await _database.DeleteUserAuthKeys(user);
                 return Ok();
             }
             catch (Exception)
@@ -261,6 +284,7 @@ namespace NAuthAPI.Controllers
                 return Problem();
             }
         }
+        [Authorize]
         [HttpGet("account/tokens")]
         public async Task<ActionResult> UserTokens([FromForm] string client_id, [FromForm] string client_secret)
         {
@@ -271,7 +295,7 @@ namespace NAuthAPI.Controllers
             try
             {
                 string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                var keys = await database.GetUserKeys(user);
+                var keys = await _database.GetUserKeys(user);
                 return Ok(keys);
             }
             catch (Exception)
@@ -300,7 +324,7 @@ namespace NAuthAPI.Controllers
                 Iterations = 2,
                 Salt = salt,
                 AssociatedData = Encoding.UTF8.GetBytes(guid),
-                KnownSecret = Encoding.UTF8.GetBytes(pepper)
+                KnownSecret = Encoding.UTF8.GetBytes(_pepper)
             };
 
             var hash = await argon2.GetBytesAsync(32);

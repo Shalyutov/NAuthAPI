@@ -114,7 +114,7 @@ namespace NAuthAPI
                     parameters: new Dictionary<string, YdbValue>
                     {
                         { "$id", YdbValue.MakeUtf8(keyId) },
-                        { "$username", YdbValue.MakeUtf8(username) },
+                        { "$user", YdbValue.MakeUtf8(username) },
                         { "$audience", YdbValue.MakeUtf8(audience) }
                     }
                 ));
