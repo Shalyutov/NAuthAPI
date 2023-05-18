@@ -170,10 +170,10 @@ namespace NAuthAPI.Controllers
             {
                 Dictionary<string, string> claims = new Dictionary<string, string>();
                 if (email != null) claims.Add("email", email);
-                if (surname != null) claims.Add("email", surname);
-                if (name != null) claims.Add("email", name);
-                if (lastname != null) claims.Add("email", lastname);
-                if (gender != null) claims.Add("email", gender);
+                if (surname != null) claims.Add("surname", surname);
+                if (name != null) claims.Add("name", name);
+                if (lastname != null) claims.Add("lastname", lastname);
+                if (gender != null) claims.Add("gender", gender);
 
                 var result = await _database.UpdateAccount(user, claims);
                 if (result) 
