@@ -8,19 +8,28 @@ using NAuthAPI;
 using NAuthAPI.Controllers;
 using System.Security.Cryptography;
 using Ydb.Sdk;
+using Ydb.Sdk.Auth;
 using Ydb.Sdk.Table;
 using Ydb.Sdk.Yc;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var account = new ServiceAccountProvider("yandexSA.json");//авторизованный ключ доступа
-account.Initialize().Wait();
+string keypath = builder.Configuration["KeyPath"] ?? "";
+ICredentialsProvider provider;
+if (keypath != "")
+{
+    provider = new ServiceAccountProvider(keypath);//авторизованный ключ доступа
+    ((ServiceAccountProvider)provider).Initialize().Wait();
+}
+else
+{
+    provider = new AnonymousProvider();//анонимный доступ к базе данных
+}
 
 var Config = new DriverConfig(
         endpoint: builder.Configuration["Endpoint"] ?? "",
         database: builder.Configuration["Database"] ?? "",
-        credentials: account
-        );
+        credentials: provider);
 var Driver = new Driver(Config);
 Driver.Initialize().Wait();
 
