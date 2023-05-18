@@ -158,8 +158,7 @@ namespace NAuthAPI.Controllers
         }
         [Authorize]
         [HttpPut("account/update")]
-        public async Task<ActionResult> UpdateAccount([FromForm] string client_id, [FromForm] string client_secret,
-            [FromForm] string? email, [FromForm] string? name, [FromForm] string? surname, [FromForm] string? lastname, [FromForm] string? gender)
+        public async Task<ActionResult> UpdateAccount([FromForm] string client_id, [FromForm] string client_secret, [FromForm] string? email, [FromForm] string? name, [FromForm] string? surname, [FromForm] string? lastname, [FromForm] string? gender)
         {
             if (!IsDBInitialized())
                 return Problem("Драйвер базы данных не инициализирован");
@@ -210,7 +209,7 @@ namespace NAuthAPI.Controllers
                 new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, AuthProperties.ISSUER),
                 new Claim(ClaimTypes.Surname, surname, ClaimValueTypes.String, AuthProperties.ISSUER),
                 new Claim(ClaimTypes.Name, name, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim("LastName", name, ClaimValueTypes.String, AuthProperties.ISSUER),
+                new Claim("LastName", lastname, ClaimValueTypes.String, AuthProperties.ISSUER),
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, AuthProperties.ISSUER)
             };
             ClaimsIdentity identity = new(claims);
