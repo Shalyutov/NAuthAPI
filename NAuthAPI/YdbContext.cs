@@ -154,7 +154,7 @@ namespace NAuthAPI
                 throw new ApplicationException("Пустой ответ от базы данных");
             }
         }
-        public async Task<bool> UpdateAccount(string username, Dictionary<string, string> claims)
+        public async Task<bool> UpdateAccount(string username, Dictionary<string, object> claims)
         {
             if (claims.Count == 0) return true;
             StringBuilder queryBuilder = new StringBuilder();
@@ -164,13 +164,20 @@ namespace NAuthAPI
                 { "$id", YdbValue.MakeUtf8(username) }
             };
             queryBuilder.AppendLine($"DECLARE $id AS Utf8;");
-            var scopes = "surname name lastname email gender";
+            var stringScopes = "surname name lastname email gender";
+            var uint64Scopes = "phone";
             foreach (var record in claims)
             {
-                if (scopes.Split(" ").Contains(record.Key))
+                if (stringScopes.Split(" ").Contains(record.Key))
                 {
-                    parameters.Add($"${record.Key}", YdbValue.MakeUtf8(record.Value));
+                    parameters.Add($"${record.Key}", YdbValue.MakeUtf8((string)record.Value));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Utf8;");
+                    bindings.Append($"{record.Key} = ${record.Key}, ");
+                }
+                else if (uint64Scopes.Split(" ").Contains(record.Key))
+                {
+                    parameters.Add($"${record.Key}", YdbValue.MakeUint64((UInt64)record.Value));
+                    queryBuilder.AppendLine($"DECLARE ${record.Key} AS Uint64;");
                     bindings.Append($"{record.Key} = ${record.Key}, ");
                 }
             }

@@ -158,7 +158,7 @@ namespace NAuthAPI.Controllers
         }
         [Authorize]
         [HttpPut("account/update")]
-        public async Task<ActionResult> UpdateAccount([FromForm] string client_id, [FromForm] string client_secret, [FromForm] string? email, [FromForm] string? name, [FromForm] string? surname, [FromForm] string? lastname, [FromForm] string? gender)
+        public async Task<ActionResult> UpdateAccount([FromForm] string client_id, [FromForm] string client_secret, [FromForm] string? email, [FromForm] string? name, [FromForm] string? surname, [FromForm] string? lastname, [FromForm] string? gender, [FromForm] UInt64? phone)
         {
             if (!IsDBInitialized())
                 return Problem("Драйвер базы данных не инициализирован");
@@ -167,12 +167,13 @@ namespace NAuthAPI.Controllers
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
             if (user != null)
             {
-                Dictionary<string, string> claims = new Dictionary<string, string>();
+                Dictionary<string, object> claims = new Dictionary<string, object>();
                 if (email != null) claims.Add("email", email);
                 if (surname != null) claims.Add("surname", surname);
                 if (name != null) claims.Add("name", name);
                 if (lastname != null) claims.Add("lastname", lastname);
                 if (gender != null) claims.Add("gender", gender);
+                if (phone != null) claims.Add("phone", phone);
 
                 var result = await _database.UpdateAccount(user, claims);
                 if (result) 
