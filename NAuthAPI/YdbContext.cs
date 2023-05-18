@@ -1,6 +1,8 @@
 ﻿using Org.BouncyCastle.Asn1.X509;
 using System;
+using System.Reflection.Metadata.Ecma335;
 using System.Security.Claims;
+using System.Text;
 using System.Xml.Linq;
 using Ydb.Sdk.Table;
 using Ydb.Sdk.Value;
@@ -135,83 +137,103 @@ namespace NAuthAPI
         }
         public async Task<bool> DeleteUserAuthKeys(string username)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.DeleteUserKeysQuery,
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$username", YdbValue.MakeUtf8(username) }
-                    }
-                ));
-            return response.Status.IsSuccess;
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$username", YdbValue.MakeUtf8(username) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.DeleteUserKeysQuery, parameters);
+            return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> IsKeyValid(string keyId)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.GetKeyQuery,
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$id", YdbValue.MakeUtf8(keyId) }
-                    }
-                ));
-            if (response.Status.IsSuccess)
+            var parameters = new Dictionary<string, YdbValue>
             {
-                var queryResponse = (ExecuteDataQueryResponse)response;
-                var sets = queryResponse.Result.ResultSets;
-                if (sets.Count > 0)
-                {
-                    if (sets[0].Rows.Count > 0)
-                        return true;
-                    else
-                        return false;
-                }
+                { "$id", YdbValue.MakeUtf8(keyId) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.GetKeyQuery, parameters);
+            var sets = queryResponse.Result.ResultSets;
+            if (sets.Count > 0)
+            {
+                if (sets[0].Rows.Count > 0)
+                    return true;
                 else
-                {
-                    throw new ApplicationException("Пустой ответ от базы данных");
-                }
+                    return false;
             }
             else
             {
-                throw new ApplicationException($"Запрос к базе данных не обработан: {response.Status.Issues.First().Message}");
+                throw new ApplicationException("Пустой ответ от базы данных");
             }
         }
         public async Task<List<string>> GetUserKeys(string username)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.GetUserKeysQuery,
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$username", YdbValue.MakeUtf8(username) }
-                    }
-                ));
-            if (response.Status.IsSuccess)
+            var parameters = new Dictionary<string, YdbValue>
             {
-                var queryResponse = (ExecuteDataQueryResponse)response;
-                var sets = queryResponse.Result.ResultSets;
-                if (sets.Count > 0)
+                { "$username", YdbValue.MakeUtf8(username) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.GetUserKeysQuery, parameters);
+            var sets = queryResponse.Result.ResultSets;
+            if (sets.Count > 0)
+            {
+                List<string> keys = new List<string>();
+                foreach (var row in sets[0].Rows)
                 {
-                    List<string> keys = new List<string>();
-                    foreach(var row in sets[0].Rows)
+                    var kid = row["kid"].GetOptionalUtf8();
+                    if (kid != null)
                     {
-                        var kid = row["kid"].GetOptionalUtf8();
-                        if (kid != null)
-                            keys.Add(kid);
+                        keys.Add(kid);
                     }
-                    return keys;
                 }
-                else
-                {
-                    throw new ApplicationException("Пустой ответ от базы данных");
-                }
+                return keys;
             }
             else
             {
-                throw new ApplicationException($"Запрос к базе данных не обработан: {response.Status.Issues.First().Message}");
+                throw new ApplicationException("Пустой ответ от базы данных");
+            }
+        }
+        public async Task<bool> UpdateAccount(string username, Dictionary<string, string> claims)
+        {
+            if (claims.Count == 0) return true;
+            StringBuilder queryBuilder = new StringBuilder();
+            StringBuilder bindings = new StringBuilder();
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$id", YdbValue.MakeUtf8(username) }
+            };
+            queryBuilder.AppendLine($"DECLARE $id AS Utf8;");
+            var scopes = "surname name lastname email gender";
+            foreach (var record in claims)
+            {
+                if (scopes.Split(" ").Contains(record.Key))
+                {
+                    parameters.Add($"${record.Key}", YdbValue.MakeUtf8(record.Value));
+                    queryBuilder.AppendLine($"DECLARE ${record.Key} AS Utf8;");
+                    bindings.Append($"{record.Key} = ${record.Key}, ");
+                }
+            }
+            if (bindings.Length > 1)
+            {
+                bindings.Remove(bindings.Length - 2, 2);//remove redundant comma
+            }
+            else
+            {
+                return true;
+            }
+            queryBuilder.AppendLine($"UPDATE users SET {bindings.ToString()} WHERE guid = $id");
+            var queryResponse = await ExecuteQuery(queryBuilder.ToString(), parameters);
+            return queryResponse.Status.IsSuccess;
+        }
+        public async Task<ExecuteDataQueryResponse> ExecuteQuery(string query, Dictionary<string, YdbValue> parameters)
+        {
+            var response = await _client.SessionExec(async session => 
+                await session.ExecuteDataQuery(query, TxControl.BeginSerializableRW().Commit(), parameters)
+            );
+            if (response.Status.IsSuccess)
+            {
+                return (ExecuteDataQueryResponse)response;
+            }
+            else
+            {
+                throw new ApplicationException($"Запрос к базе данных не обработан: { response.Status.Issues[0].Message }");
             }
         }
     }

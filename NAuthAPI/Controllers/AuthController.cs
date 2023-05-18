@@ -156,6 +156,41 @@ namespace NAuthAPI.Controllers
                 return Problem(ex.Message);
             }
         }
+        [Authorize]
+        [HttpPut("account/update")]
+        public async Task<ActionResult> UpdateAccount([FromForm] string client_id, [FromForm] string client_secret,
+            [FromForm] string? email, [FromForm] string? name, [FromForm] string? surname, [FromForm] string? lastname, [FromForm] string? gender)
+        {
+            if (!IsDBInitialized())
+                return Problem("Драйвер базы данных не инициализирован");
+            if (client_id != "NAUTH" || client_secret != "758694321")
+                return Forbid("Неверные данные клиентского приложения");
+            var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
+            if (user != null)
+            {
+                Dictionary<string, string> claims = new Dictionary<string, string>();
+                if (email != null) claims.Add("email", email);
+                if (surname != null) claims.Add("email", surname);
+                if (name != null) claims.Add("email", name);
+                if (lastname != null) claims.Add("email", lastname);
+                if (gender != null) claims.Add("email", gender);
+
+                var result = await _database.UpdateAccount(user, claims);
+                if (result) 
+                { 
+                    return Ok();
+                }
+                else
+                {
+                    return BadRequest();
+                }
+            }
+            else
+            {
+                BadRequest("Авторизованный ключ не содержит имени пользователя");
+            }
+            return Ok();
+        }
         [HttpPost("signup")]
         public async Task<ActionResult> SignUp([FromForm] string username, [FromForm] string surname, [FromForm] string name, [FromForm] string lastname, [FromForm] string password, [FromForm] string client_id, [FromForm] string client_secret)
         {
