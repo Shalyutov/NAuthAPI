@@ -12,128 +12,92 @@ namespace NAuthAPI
     public class YdbContext
     {
         private readonly TableClient _client;
-        public YdbContext(TableClient client) => _client = client ?? throw new ArgumentNullException(nameof(client),"Клиент доступа к БД не может быть null");
+        public YdbContext(TableClient client) => _client = client ?? throw new ArgumentNullException(nameof(client), "Клиент доступа к БД не может быть null");
         public async Task<Account?> GetAccount(string username)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.GetIdentityQuery, 
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$id", YdbValue.MakeUtf8(username) }
-                    }
-                ));
-
-            if (response.Status.IsSuccess)
+            var parameters = new Dictionary<string, YdbValue>
             {
-                var queryResponse = (ExecuteDataQueryResponse)response;
-                if (queryResponse.Result.ResultSets.Count > 0)
-                {
-                    ResultSet.Row record = queryResponse.Result.ResultSets[0].Rows[0];
+                { "$id", YdbValue.MakeUtf8(username) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.GetIdentityQuery, parameters);
+            var sets = queryResponse.Result.ResultSets;
+            if (sets.Count > 0)
+            {
+                ResultSet.Row record = sets[0].Rows[0];
 
-                    Claim upn = new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, "NAuth API");
-                    Claim surname = new Claim(ClaimTypes.Surname, record["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
-                    Claim name = new Claim(ClaimTypes.Name, record["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
-                    Claim guid = new Claim(ClaimTypes.SerialNumber, record["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
-                    string hash = record["hash"].GetOptionalUtf8() ?? "";
-                    string salt = record["salt"].GetOptionalUtf8() ?? "";
+                Claim upn = new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, "NAuth API");
+                Claim surname = new Claim(ClaimTypes.Surname, record["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
+                Claim name = new Claim(ClaimTypes.Name, record["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
+                Claim guid = new Claim(ClaimTypes.SerialNumber, record["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
+                string hash = record["hash"].GetOptionalUtf8() ?? "";
+                string salt = record["salt"].GetOptionalUtf8() ?? "";
 
-                    List<Claim> claims = new List<Claim>() { upn, surname, name, guid };
+                List<Claim> claims = new List<Claim>() { upn, surname, name, guid };
 
-                    ClaimsIdentity identity = new ClaimsIdentity(claims, "Bearer");
+                ClaimsIdentity identity = new ClaimsIdentity(claims, "Bearer");
 
-                    Account account = new Account(identity, hash, salt);
-                    return account;
-                }
-                else
-                {
-                    return null;
-                }
+                Account account = new Account(identity, hash, salt);
+                return account;
             }
             else
             {
-                throw new ApplicationException($"Запрос к базе данных не обработан: {response.Status.Issues.First().Message}");
+                return null;
             }
         }
         public async Task<bool> IsUsernameExists(string username)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.GetIdentityQuery,
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$id", YdbValue.MakeUtf8(username) }
-                    }
-                ));
-            if (response.Status.IsSuccess)
+            var parameters = new Dictionary<string, YdbValue>
             {
-                var queryResponse = (ExecuteDataQueryResponse)response;
-                var sets = queryResponse.Result.ResultSets;
-                if (sets.Count > 0)
-                {
-                    if (sets[0].Rows.Count > 0)
-                        return true;
-                    else 
-                        return false;
-                }
+                { "$id", YdbValue.MakeUtf8(username) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.GetIdentityQuery, parameters);
+            var sets = queryResponse.Result.ResultSets;
+            if (sets.Count > 0)
+            {
+                if (sets[0].Rows.Count > 0)
+                    return true;
                 else
-                {
-                    throw new ApplicationException("Пустой ответ от базы данных");
-                }
+                    return false;
             }
             else
             {
-                throw new ApplicationException($"Запрос к базе данных не обработан: {response.Status.Issues.First().Message}");
+                throw new ApplicationException("Пустой ответ от базы данных");
             }
         }
         public async Task<bool> CreateAccount(Account account)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.CreateIdentityQuery,
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$id", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "") },
-                        { "$username", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Upn)?.Value ?? "") },
-                        { "$surname", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Surname)?.Value ?? "") },
-                        { "$name", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Name)?.Value ?? "") },
-                        { "$lastname", YdbValue.MakeUtf8(account.Identity.FindFirst("LastName")?.Value ?? "") },
-                        { "$hash", YdbValue.MakeUtf8(account.Hash) },
-                        { "$salt", YdbValue.MakeUtf8(account.Salt) }
-                    }
-                ));
-            return response.Status.IsSuccess;
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$id", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "") },
+                { "$username", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Upn)?.Value ?? "") },
+                { "$surname", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Surname)?.Value ?? "") },
+                { "$name", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Name)?.Value ?? "") },
+                { "$lastname", YdbValue.MakeUtf8(account.Identity.FindFirst("LastName")?.Value ?? "") },
+                { "$hash", YdbValue.MakeUtf8(account.Hash) },
+                { "$salt", YdbValue.MakeUtf8(account.Salt) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.CreateIdentityQuery, parameters);
+            return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> CreateAuthKey(string keyId, string audience, string username)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.CreateSignInQuery,
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$id", YdbValue.MakeUtf8(keyId) },
-                        { "$user", YdbValue.MakeUtf8(username) },
-                        { "$audience", YdbValue.MakeUtf8(audience) }
-                    }
-                ));
-            return response.Status.IsSuccess;
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$id", YdbValue.MakeUtf8(keyId) },
+                { "$user", YdbValue.MakeUtf8(username) },
+                { "$audience", YdbValue.MakeUtf8(audience) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.CreateSignInQuery, parameters);
+            return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> DeleteAuthKey(string keyId)
         {
-            var response = await _client.SessionExec(async session =>
-                await session.ExecuteDataQuery(
-                    Queries.DeleteKeyQuery,
-                    TxControl.BeginSerializableRW().Commit(),
-                    parameters: new Dictionary<string, YdbValue>
-                    {
-                        { "$id", YdbValue.MakeUtf8(keyId) }
-                    }
-                ));
-            return response.Status.IsSuccess;
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$id", YdbValue.MakeUtf8(keyId) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.DeleteKeyQuery, parameters);
+            return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> DeleteUserAuthKeys(string username)
         {
