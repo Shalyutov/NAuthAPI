@@ -32,36 +32,30 @@ namespace NAuthAPI.Controllers
     [ApiController]
     public class AuthController : ControllerBase
     {
-        readonly YdbContext _database;
+        readonly AppContext _database;
         readonly string _pepper;
-        public AuthController(IConfiguration webconfig, YdbContext db)
+        readonly string _issuer;
+        readonly string _audience;
+        public AuthController(IConfiguration webconfig, AppContext db)
         {
             _database = db;
             _pepper = webconfig["Pepper"] ?? "";
+            _issuer = webconfig["Issuer"] ?? "";
+            _audience = webconfig["Audience"] ?? "";
         }
-        private bool IsDBInitialized()
-        {
-            if (_database != null)
-            {
-                return true;
-            }
-            else 
-            {
-                return false;
-            }
-        }
+        private bool IsDBInitialized => _database != null;
         [HttpGet("db/status")]
         public ActionResult DatabaseStatus()
         {
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             else
-                return Ok("Драйвер базы данных успешно запущен.");
+                return Ok("Драйвер базы данных успешно запущен");
         }
         [HttpPost("signin")]
         public async Task<ActionResult> SignIn([FromForm] string username, [FromForm] string password, [FromForm] string client_id, [FromForm] string client_secret)//add client validation
         {
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
@@ -82,7 +76,7 @@ namespace NAuthAPI.Controllers
                     if (IsHashValid(hash, account.Hash))
                     {
                         var key = await CreateSecurityKey();
-                        var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid ?? "");
+                        var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, _audience, guid ?? "");
                         if (isKeyRegistered)
                         {
                             var id = CreateIdToken(account.Identity.Claims, key);
@@ -110,7 +104,7 @@ namespace NAuthAPI.Controllers
         [HttpGet("account/exists")]
         public async Task<ActionResult> IsUserExists([FromQuery]string username, [FromForm] string client_id, [FromForm] string client_secret)
         {
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
@@ -135,7 +129,7 @@ namespace NAuthAPI.Controllers
         [HttpGet("account")]
         public async Task<ActionResult> GetAccount([FromForm] string client_id, [FromForm] string client_secret)
         {
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
@@ -160,14 +154,14 @@ namespace NAuthAPI.Controllers
         [HttpPut("account/update")]
         public async Task<ActionResult> UpdateAccount([FromForm] string client_id, [FromForm] string client_secret, [FromForm] string? email, [FromForm] string? name, [FromForm] string? surname, [FromForm] string? lastname, [FromForm] string? gender, [FromForm] UInt64? phone)
         {
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
             if (user != null)
             {
-                Dictionary<string, object> claims = new Dictionary<string, object>();
+                Dictionary<string, object> claims = new();
                 if (email != null) claims.Add("email", email);
                 if (surname != null) claims.Add("surname", surname);
                 if (name != null) claims.Add("name", name);
@@ -198,7 +192,7 @@ namespace NAuthAPI.Controllers
                 return BadRequest();
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
-            if (!IsDBInitialized()) 
+            if (!IsDBInitialized) 
                 return Problem("Драйвер базы данных не инициализирован");
 
             string guid = Guid.NewGuid().ToString();
@@ -207,17 +201,17 @@ namespace NAuthAPI.Controllers
 
             var claims = new List<Claim>()
             {
-                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim(ClaimTypes.Surname, surname, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim(ClaimTypes.Name, name, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim("LastName", lastname, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, AuthProperties.ISSUER)
+                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Surname, surname, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Name, name, ClaimValueTypes.String, _issuer),
+                new Claim("LastName", lastname, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer)
             };
             ClaimsIdentity identity = new(claims);
             Account account = new(identity, hash, Convert.ToBase64String(salt));
 
             var key = await CreateSecurityKey();
-            var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid);
+            var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, _audience, guid);
 
             var isAccountCreated = await _database.CreateAccount(account);
             if (isAccountCreated)
@@ -246,7 +240,7 @@ namespace NAuthAPI.Controllers
         {
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             var auth = await HttpContext.AuthenticateAsync();
             var token = await HttpContext.GetTokenAsync(JwtBearerDefaults.AuthenticationScheme, "access_token");
@@ -262,7 +256,7 @@ namespace NAuthAPI.Controllers
                     await _database.DeleteAuthKey(id);
                     var key = await CreateSecurityKey();
                     string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                    await _database.CreateAuthKey(key.KeyId, AuthProperties.AUDIENCE, guid);
+                    await _database.CreateAuthKey(key.KeyId, _audience, guid);
                     string access = CreateAccessToken(guid, key, "user");
                     string refresh = CreateRefreshToken(guid, key);
                     var result = new
@@ -287,7 +281,7 @@ namespace NAuthAPI.Controllers
         {
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             try
             {
@@ -305,7 +299,7 @@ namespace NAuthAPI.Controllers
         {
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             try
             {
@@ -325,7 +319,7 @@ namespace NAuthAPI.Controllers
         {
             if (client_id != "NAUTH" || client_secret != "758694321")
                 return Forbid("Неверные данные клиентского приложения");
-            if (!IsDBInitialized())
+            if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             try
             {
@@ -382,30 +376,21 @@ namespace NAuthAPI.Controllers
             await System.IO.File.WriteAllTextAsync($"keys/{key.KeyId}.key", Convert.ToBase64String(key.Key));
             return key;
         }
-        private static async Task<SymmetricSecurityKey> GetSecurityKey(string keyId)
-        {
-            var keystr = await System.IO.File.ReadAllTextAsync($"keys/{keyId}.key");
-            var key = new SymmetricSecurityKey(Convert.FromBase64String(keystr))
-            {
-                KeyId = keyId
-            };
-            return key;
-        }
-        private void DeleteSecurityKey(string keyId)
+        private static void DeleteSecurityKey(string keyId)
         {
             System.IO.File.Delete($"keys/{keyId}.key");
         }
         private string CreateIdToken(IEnumerable<Claim> claims, SymmetricSecurityKey key)
         {
-            claims.Append(new Claim("token", "id", ClaimValueTypes.String, AuthProperties.ISSUER));
+            claims.Append(new Claim("token", "id", ClaimValueTypes.String, _issuer));
             var token = CreateToken(claims, key, TimeSpan.FromHours(10));
             return token;
         }
         private string CreateRefreshToken(string guid, SymmetricSecurityKey key)
         {
             var claims = new List<Claim>() { 
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim("token", "refresh", ClaimValueTypes.String, AuthProperties.ISSUER)
+                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
+                new Claim("token", "refresh", ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromDays(14));
             return token;
@@ -413,19 +398,19 @@ namespace NAuthAPI.Controllers
         private string CreateAccessToken(string guid, SymmetricSecurityKey key, string scope)
         {
             var claims = new List<Claim>() {
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim("scope", scope, ClaimValueTypes.String, AuthProperties.ISSUER),
-                new Claim("token", "access", ClaimValueTypes.String, AuthProperties.ISSUER)
+                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
+                new Claim("scope", scope, ClaimValueTypes.String, _issuer),
+                new Claim("token", "access", ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromHours(1));
             return token;
         }
-        private static string CreateToken(IEnumerable<Claim> claims, SymmetricSecurityKey key, TimeSpan lifetime)
+        private string CreateToken(IEnumerable<Claim> claims, SymmetricSecurityKey key, TimeSpan lifetime)
         {
             var now = DateTime.UtcNow;
             var jwt = new JwtSecurityToken(
-                AuthProperties.ISSUER,
-                AuthProperties.AUDIENCE,
+                _issuer,
+                _audience,
                 claims,
                 now,
                 now.Add(lifetime),
@@ -433,10 +418,5 @@ namespace NAuthAPI.Controllers
             var token = new JwtSecurityTokenHandler().WriteToken(jwt);
             return token;
         }
-    }
-    public class AuthProperties
-    {
-        public static string ISSUER = "NAuth API";
-        public static string AUDIENCE = "NAuth App";
     }
 }

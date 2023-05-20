@@ -9,10 +9,15 @@ using Ydb.Sdk.Value;
 
 namespace NAuthAPI
 {
-    public class YdbContext
+    public class AppContext
     {
         private readonly TableClient _client;
-        public YdbContext(TableClient client) => _client = client ?? throw new ArgumentNullException(nameof(client), "Клиент доступа к БД не может быть null");
+        readonly string _issuer;
+        public AppContext(TableClient client, string issuer)
+        {
+            _client = client ?? throw new ArgumentNullException(nameof(client), "Клиент доступа к БД не может быть null");
+            _issuer = issuer;
+        }
         public async Task<Account?> GetAccount(string username)
         {
             var parameters = new Dictionary<string, YdbValue>
@@ -25,18 +30,19 @@ namespace NAuthAPI
             {
                 ResultSet.Row record = sets[0].Rows[0];
 
-                Claim upn = new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, "NAuth API");
-                Claim surname = new Claim(ClaimTypes.Surname, record["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
-                Claim name = new Claim(ClaimTypes.Name, record["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
-                Claim guid = new Claim(ClaimTypes.SerialNumber, record["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, "NAuth API");
+                List<Claim> claims = new() 
+                {
+                    new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
+                    new Claim(ClaimTypes.Surname, record["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                    new Claim(ClaimTypes.Name, record["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                    new Claim(ClaimTypes.SerialNumber, record["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                };
                 string hash = record["hash"].GetOptionalUtf8() ?? "";
                 string salt = record["salt"].GetOptionalUtf8() ?? "";
 
-                List<Claim> claims = new List<Claim>() { upn, surname, name, guid };
+                ClaimsIdentity identity = new(claims, "Bearer");
 
-                ClaimsIdentity identity = new ClaimsIdentity(claims, "Bearer");
-
-                Account account = new Account(identity, hash, salt);
+                Account account = new(identity, hash, salt);
                 return account;
             }
             else
@@ -138,7 +144,7 @@ namespace NAuthAPI
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count > 0)
             {
-                List<string> keys = new List<string>();
+                List<string> keys = new();
                 foreach (var row in sets[0].Rows)
                 {
                     var kid = row["kid"].GetOptionalUtf8();
@@ -157,8 +163,8 @@ namespace NAuthAPI
         public async Task<bool> UpdateAccount(string username, Dictionary<string, object> claims)
         {
             if (claims.Count == 0) return true;
-            StringBuilder queryBuilder = new StringBuilder();
-            StringBuilder bindings = new StringBuilder();
+            StringBuilder queryBuilder = new();
+            StringBuilder bindings = new();
             var parameters = new Dictionary<string, YdbValue>
             {
                 { "$id", YdbValue.MakeUtf8(username) }
@@ -172,14 +178,17 @@ namespace NAuthAPI
                 {
                     parameters.Add($"${record.Key}", YdbValue.MakeUtf8((string)record.Value));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Utf8;");
-                    bindings.Append($"{record.Key} = ${record.Key}, ");
                 }
                 else if (uint64Scopes.Split(" ").Contains(record.Key))
                 {
                     parameters.Add($"${record.Key}", YdbValue.MakeUint64((UInt64)record.Value));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Uint64;");
-                    bindings.Append($"{record.Key} = ${record.Key}, ");
                 }
+                else
+                {
+                    continue;
+                }
+                bindings.Append($"{record.Key} = ${record.Key}, ");
             }
             if (bindings.Length > 1)
             {
@@ -207,75 +216,5 @@ namespace NAuthAPI
                 throw new ApplicationException($"Запрос к базе данных не обработан: { response.Status.Issues[0].Message }");
             }
         }
-    }
-    class Queries
-    {
-        public static string GetIdentityQuery = @"
-        DECLARE $id AS Utf8;
-        SELECT
-            hash, name, surname, guid, salt
-        FROM
-            users
-        WHERE 
-            username = $id;";
-        public static string GetKeyQuery = @"
-        DECLARE $id AS Utf8;
-        SELECT
-            kid, user, audience
-        FROM
-            keys
-        WHERE 
-            kid = $id;";
-        public static string DeleteKeyQuery = @"
-        DECLARE $id AS Utf8;
-        DELETE
-        FROM
-            keys
-        WHERE 
-            kid = $id;";
-        public static string DeleteUserKeysQuery = @"
-        DECLARE $user AS Utf8;
-        DELETE
-        FROM
-            keys
-        WHERE 
-            user = $user;";
-        public static string GetUserKeysQuery = @"
-        DECLARE $username AS Utf8;
-        SELECT
-            kid
-        FROM
-            keys
-        WHERE 
-            user = $user;";
-        public static string UsernameQuery = @"
-        DECLARE $id AS Utf8;
-        SELECT
-            guid
-        FROM
-            users
-        WHERE 
-            username = $id;";
-        public static string CreateIdentityQuery = @"
-        DECLARE $id As Utf8;
-        DECLARE $username AS Utf8;
-        DECLARE $surname AS Utf8;
-        DECLARE $name AS Utf8;
-        DECLARE $lastname AS Utf8;
-        DECLARE $hash AS Utf8;
-        DECLARE $salt AS Utf8;
-        INSERT INTO 
-            users (guid, username, surname, name, lastname, hash, salt) 
-        VALUES
-            ($id, $username, $surname, $name, $lastname, $hash, $salt);";
-        public static string CreateSignInQuery = @"
-        DECLARE $id As Utf8;
-        DECLARE $user AS Utf8;
-        DECLARE $audience AS Utf8;
-        INSERT INTO 
-            keys (kid, user, audience) 
-        VALUES
-            ($id, $user, $audience);";
-
     }
 }

@@ -15,26 +15,29 @@ using Ydb.Sdk.Yc;
 var builder = WebApplication.CreateBuilder(args);
 
 string keypath = builder.Configuration["KeyPath"] ?? "";
+string endpoint = builder.Configuration["Endpoint"] ?? "";
+string database = builder.Configuration["Database"] ?? "";
+string issuer = builder.Configuration["Issuer"] ?? "";
+string audience = builder.Configuration["Audience"] ?? "";
+
 ICredentialsProvider provider;
-if (keypath != "")
+
+if (keypath != "")//Используем авторизованный ключ доступа если он задан в настройках приложения
 {
-    provider = new ServiceAccountProvider(keypath);//авторизованный ключ доступа
+    provider = new ServiceAccountProvider(keypath);
     ((ServiceAccountProvider)provider).Initialize().Wait();
 }
 else
 {
-    provider = new AnonymousProvider();//анонимный доступ к базе данных
+    provider = new AnonymousProvider();
 }
 
-var Config = new DriverConfig(
-        endpoint: builder.Configuration["Endpoint"] ?? "",
-        database: builder.Configuration["Database"] ?? "",
-        credentials: provider);
-var Driver = new Driver(Config);
-Driver.Initialize().Wait();
+var config = new DriverConfig(endpoint, database, provider);
+var driver = new Driver(config);
+driver.Initialize().Wait();
 
-var TableClient = new TableClient(Driver, new TableClientConfig());
-var Database = new YdbContext(TableClient);
+var TableClient = new TableClient(driver, new TableClientConfig());
+var Database = new NAuthAPI.AppContext(TableClient, issuer);
 
 builder.Services.AddControllers();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -44,9 +47,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters()
             {
                 ValidateIssuer = true,
-                ValidIssuer = AuthProperties.ISSUER,
+                ValidIssuer = issuer,
                 ValidateAudience = true,
-                ValidAudience = AuthProperties.AUDIENCE,
+                ValidAudience = audience,
                 ValidateLifetime = true,
                 IssuerSigningKeyValidator = (key, token, param) => {
                     return Database.IsKeyValid(key.KeyId).Result;
