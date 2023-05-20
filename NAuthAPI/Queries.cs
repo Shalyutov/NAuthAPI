@@ -2,7 +2,7 @@
 {
     class Queries
     {
-        public static string GetIdentityQuery = @"
+        public static string GetIdentity = @"
         DECLARE $id AS Utf8;
         SELECT
             hash, name, surname, guid, salt
@@ -10,7 +10,25 @@
             users
         WHERE 
             username = $id;";
-        public static string GetKeyQuery = @"
+        public static string GetClient = @"
+        DECLARE $id AS Utf8;
+        SELECT
+            name, secret, valid, implement, scopes
+        FROM
+            clients
+        WHERE 
+            name = $id;";
+        public static string CreateClient = @"
+        DECLARE $id AS Utf8;
+        DECLARE $secret AS Utf8;
+        DECLARE $valid AS Bool;
+        DECLARE $impl AS Bool;
+        DECLARE $scopes AS Utf8;
+        INSERT INTO
+            clients (name, secret, valid, implement, scopes)
+        VALUES
+            ($id, $secret, $valid, $impl, $scopes);";
+        public static string GetKey = @"
         DECLARE $id AS Utf8;
         SELECT
             kid, user, audience
@@ -18,21 +36,21 @@
             keys
         WHERE 
             kid = $id;";
-        public static string DeleteKeyQuery = @"
+        public static string DeleteKey = @"
         DECLARE $id AS Utf8;
         DELETE
         FROM
             keys
         WHERE 
             kid = $id;";
-        public static string DeleteUserKeysQuery = @"
+        public static string DeleteUserKeys = @"
         DECLARE $user AS Utf8;
         DELETE
         FROM
             keys
         WHERE 
             user = $user;";
-        public static string GetUserKeysQuery = @"
+        public static string GetUserKeys = @"
         DECLARE $username AS Utf8;
         SELECT
             kid
@@ -40,7 +58,7 @@
             keys
         WHERE 
             user = $user;";
-        public static string UsernameQuery = @"
+        public static string GetUsername = @"
         DECLARE $id AS Utf8;
         SELECT
             guid
@@ -48,7 +66,7 @@
             users
         WHERE 
             username = $id;";
-        public static string CreateIdentityQuery = @"
+        public static string CreateIdentity = @"
         DECLARE $id As Utf8;
         DECLARE $username AS Utf8;
         DECLARE $surname AS Utf8;
@@ -60,7 +78,7 @@
             users (guid, username, surname, name, lastname, hash, salt) 
         VALUES
             ($id, $username, $surname, $name, $lastname, $hash, $salt);";
-        public static string CreateSignInQuery = @"
+        public static string CreateSignIn = @"
         DECLARE $id As Utf8;
         DECLARE $user AS Utf8;
         DECLARE $audience AS Utf8;

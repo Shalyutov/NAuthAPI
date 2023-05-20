@@ -24,31 +24,27 @@ namespace NAuthAPI
             {
                 { "$id", YdbValue.MakeUtf8(username) }
             };
-            var queryResponse = await ExecuteQuery(Queries.GetIdentityQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.GetIdentity, parameters);
             var sets = queryResponse.Result.ResultSets;
-            if (sets.Count > 0)
-            {
-                ResultSet.Row record = sets[0].Rows[0];
+            if (sets.Count == 0) return null;
+            if (sets[0].Rows.Count == 0) return null;
 
-                List<Claim> claims = new() 
+            var row = sets[0].Rows[0];
+
+            List<Claim> claims = new()
                 {
                     new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
-                    new Claim(ClaimTypes.Surname, record["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
-                    new Claim(ClaimTypes.Name, record["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
-                    new Claim(ClaimTypes.SerialNumber, record["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                    new Claim(ClaimTypes.Surname, row["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                    new Claim(ClaimTypes.Name, row["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                    new Claim(ClaimTypes.SerialNumber, row["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 };
-                string hash = record["hash"].GetOptionalUtf8() ?? "";
-                string salt = record["salt"].GetOptionalUtf8() ?? "";
+            string hash = row["hash"].GetOptionalUtf8() ?? "";
+            string salt = row["salt"].GetOptionalUtf8() ?? "";
 
-                ClaimsIdentity identity = new(claims, "Bearer");
+            ClaimsIdentity identity = new(claims, "Bearer");
 
-                Account account = new(identity, hash, salt);
-                return account;
-            }
-            else
-            {
-                return null;
-            }
+            Account account = new(identity, hash, salt);
+            return account;
         }
         public async Task<bool> IsUsernameExists(string username)
         {
@@ -56,7 +52,7 @@ namespace NAuthAPI
             {
                 { "$id", YdbValue.MakeUtf8(username) }
             };
-            var queryResponse = await ExecuteQuery(Queries.GetIdentityQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.GetIdentity, parameters);
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count > 0)
             {
@@ -82,7 +78,7 @@ namespace NAuthAPI
                 { "$hash", YdbValue.MakeUtf8(account.Hash) },
                 { "$salt", YdbValue.MakeUtf8(account.Salt) }
             };
-            var queryResponse = await ExecuteQuery(Queries.CreateIdentityQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.CreateIdentity, parameters);
             return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> CreateAuthKey(string keyId, string audience, string username)
@@ -93,7 +89,7 @@ namespace NAuthAPI
                 { "$user", YdbValue.MakeUtf8(username) },
                 { "$audience", YdbValue.MakeUtf8(audience) }
             };
-            var queryResponse = await ExecuteQuery(Queries.CreateSignInQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.CreateSignIn, parameters);
             return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> DeleteAuthKey(string keyId)
@@ -102,7 +98,7 @@ namespace NAuthAPI
             {
                 { "$id", YdbValue.MakeUtf8(keyId) }
             };
-            var queryResponse = await ExecuteQuery(Queries.DeleteKeyQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.DeleteKey, parameters);
             return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> DeleteUserAuthKeys(string username)
@@ -111,7 +107,7 @@ namespace NAuthAPI
             {
                 { "$username", YdbValue.MakeUtf8(username) }
             };
-            var queryResponse = await ExecuteQuery(Queries.DeleteUserKeysQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.DeleteUserKeys, parameters);
             return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> IsKeyValid(string keyId)
@@ -120,7 +116,7 @@ namespace NAuthAPI
             {
                 { "$id", YdbValue.MakeUtf8(keyId) }
             };
-            var queryResponse = await ExecuteQuery(Queries.GetKeyQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.GetKey, parameters);
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count > 0)
             {
@@ -140,7 +136,7 @@ namespace NAuthAPI
             {
                 { "$username", YdbValue.MakeUtf8(username) }
             };
-            var queryResponse = await ExecuteQuery(Queries.GetUserKeysQuery, parameters);
+            var queryResponse = await ExecuteQuery(Queries.GetUserKeys, parameters);
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count > 0)
             {
@@ -201,6 +197,27 @@ namespace NAuthAPI
             queryBuilder.AppendLine($"UPDATE users SET {bindings.ToString()} WHERE guid = $id");
             var queryResponse = await ExecuteQuery(queryBuilder.ToString(), parameters);
             return queryResponse.Status.IsSuccess;
+        }
+        public async Task<Client?> GetClient(string name)
+        {
+            var parameters = new Dictionary<string, YdbValue>() 
+            {
+                { "$id", YdbValue.MakeUtf8(name) }
+            };
+            var response = await ExecuteQuery(Queries.GetClient, parameters);
+            var sets = response.Result.ResultSets;
+            if (sets.Count == 0) return null;
+            if (sets[0].Rows.Count == 0) return null;
+
+            var row = sets[0].Rows[0];
+            Client client = new(
+                row["name"].GetOptionalUtf8(),
+                row["secret"].GetOptionalUtf8(),
+                row["valid"].GetOptional()?.GetBool() ?? false,
+                row["implement"].GetOptional()?.GetBool() ?? false,
+                row["scopes"].GetOptionalUtf8());
+
+            return client;
         }
         public async Task<ExecuteDataQueryResponse> ExecuteQuery(string query, Dictionary<string, YdbValue> parameters)
         {
