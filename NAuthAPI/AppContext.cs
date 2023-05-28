@@ -32,12 +32,15 @@ namespace NAuthAPI
             var row = sets[0].Rows[0];
 
             List<Claim> claims = new()
-                {
-                    new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
-                    new Claim(ClaimTypes.Surname, row["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
-                    new Claim(ClaimTypes.Name, row["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
-                    new Claim(ClaimTypes.SerialNumber, row["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
-                };
+            {
+                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Surname, row["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Name, row["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.SerialNumber, row["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim("LastName", row["lastname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.MobilePhone, row["phone"].GetOptionalUint64().ToString() ?? "", ClaimValueTypes.Integer64, _issuer),
+                new Claim(ClaimTypes.Email, row["email"].GetOptionalUtf8() ?? "", ClaimValueTypes.Email, _issuer)
+            };
             string hash = row["hash"].GetOptionalUtf8() ?? "";
             string salt = row["salt"].GetOptionalUtf8() ?? "";
 

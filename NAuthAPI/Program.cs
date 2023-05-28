@@ -12,6 +12,8 @@ using Ydb.Sdk.Auth;
 using Ydb.Sdk.Table;
 using Ydb.Sdk.Yc;
 
+Directory.CreateDirectory("keys");
+
 var builder = WebApplication.CreateBuilder(args);
 
 string keypath = builder.Configuration["KeyPath"] ?? "";

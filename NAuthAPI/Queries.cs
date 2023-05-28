@@ -5,7 +5,7 @@
         public static string GetIdentity = @"
         DECLARE $id AS Utf8;
         SELECT
-            hash, name, surname, guid, salt
+            hash, name, surname, guid, salt, lastname, email, phone
         FROM
             users
         WHERE 
