@@ -10,5 +10,10 @@ namespace NAuthAPI.Controllers
         {
             return Ok("NAuth Federation");
         }
+        [HttpGet("version")]
+        public IActionResult Version()
+        {
+            return Ok("0.0.2");
+        }
     }
 }

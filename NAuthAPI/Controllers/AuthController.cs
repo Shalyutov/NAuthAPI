@@ -44,6 +44,7 @@ namespace NAuthAPI.Controllers
             _issuer = webconfig["Issuer"] ?? "";
             _audience = webconfig["Audience"] ?? "";
         }
+        #region Endpoints Logic
         [HttpGet("db/status")]
         public ActionResult DatabaseStatus()
         {
@@ -60,6 +61,8 @@ namespace NAuthAPI.Controllers
             var client = await GetClientAsync(client_id, client_secret);
             if (client == null)
                 return BadRequest("Клиентское приложение не авторизовано");
+            if (!client.IsImplementation) 
+                return BadRequest("Клиент не имеет доверенной реализации потока системы");
             if (username == "" || password == "")
                 return BadRequest("Нет данных для авторизации");
 
@@ -164,6 +167,9 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Клиентское приложение не авторизовано");
             if (!HttpContext.Request.HasFormContentType) 
                 return BadRequest("Нет утверждений для изменения");
+            var auth = await HttpContext.AuthenticateAsync();
+            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? string.Empty;
+            if (!scope.Contains("user")) return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             var form = await HttpContext.Request.ReadFormAsync();
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
             if (user != null)
@@ -194,6 +200,8 @@ namespace NAuthAPI.Controllers
             var client = await GetClientAsync(client_id, client_secret);
             if (client == null)
                 return BadRequest("Клиентское приложение не авторизовано");
+            if (client.IsImplementation) 
+                return BadRequest("Клиент не имеет доверенной реализации потока системы");
             if (!HttpContext.Request.HasFormContentType)
                 return BadRequest("Нет утверждений для изменения");
             var form = await HttpContext.Request.ReadFormAsync();
@@ -250,39 +258,37 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Клиентское приложение не авторизовано");
 
             var auth = await HttpContext.AuthenticateAsync();
+            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!scope.Contains("refresh"))
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+
             var token = await HttpContext.GetTokenAsync(JwtBearerDefaults.AuthenticationScheme, "access_token");
             var handler = new JwtSecurityTokenHandler();
             var id = handler.ReadJwtToken(token).Header.Kid;
-            var token_name = auth.Principal?.FindFirstValue("token") ?? "";
-            if (token_name == "refresh")
+            
+            var isValid = await _database.IsKeyValid(id);
+            if (isValid)
             {
-                var isValid = await _database.IsKeyValid(id);
-                if (isValid)
+                DeleteSecurityKey(id);
+                await _database.DeleteAuthKey(id);
+                var key = await CreateSecurityKey();
+                string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+                await _database.CreateAuthKey(key.KeyId, _audience, guid);
+                string access = CreateAccessToken(guid, key, "user");
+                string refresh = CreateRefreshToken(guid, key);
+                var result = new
                 {
-                    DeleteSecurityKey(id);
-                    await _database.DeleteAuthKey(id);
-                    var key = await CreateSecurityKey();
-                    string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                    await _database.CreateAuthKey(key.KeyId, _audience, guid);
-                    string access = CreateAccessToken(guid, key, "user");
-                    string refresh = CreateRefreshToken(guid, key);
-                    var result = new
-                    {
-                        access_token = access,
-                        refresh_token = refresh
-                    };
-                    return Ok(result);
-                }
-                else
-                {
-                    return Unauthorized();
-                }
+                    access_token = access,
+                    refresh_token = refresh
+                };
+                return Ok(result);
             }
             else
             {
-                return Unauthorized();
+                return BadRequest("Токен не представлен в системе или уже деактивирован");
             }
         }
+        [Authorize]
         [HttpGet("token/revoke")]
         public async Task<ActionResult> Revoke([FromHeader] string client_id, [FromHeader] string client_secret, [FromForm] string kid)
         {
@@ -291,6 +297,12 @@ namespace NAuthAPI.Controllers
             var client = await GetClientAsync(client_id, client_secret);
             if (client == null)
                 return BadRequest("Клиентское приложение не авторизовано");
+
+            var auth = await HttpContext.AuthenticateAsync();
+            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!scope.Contains("user"))
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+
             try
             {
                 DeleteSecurityKey(kid);
@@ -302,14 +314,23 @@ namespace NAuthAPI.Controllers
                 return Problem();
             }
         }
+        [Authorize]
         [HttpGet("signout")]
-        public async Task<ActionResult> SignOut([FromHeader] string client_id, [FromHeader] string client_secret, [FromForm] string user)
+        public async Task<ActionResult> SignOut([FromHeader] string client_id, [FromHeader] string client_secret)
         {
             if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
             var client = await GetClientAsync(client_id, client_secret);
             if (client == null)
                 return BadRequest("Клиентское приложение не авторизовано");
+
+            var auth = await HttpContext.AuthenticateAsync();
+            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!scope.Contains("user"))
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+
+            var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
+            if (user == null) return BadRequest("Нет идентификационной информации в токене");
             try
             {
                 var keys = await _database.GetUserKeys(user);
@@ -342,6 +363,8 @@ namespace NAuthAPI.Controllers
                 return Problem();
             }
         }
+        #endregion
+        #region Logic
         private async Task<Client?> GetClientAsync(string client_id, string client_secret)
         {
             if (client_id == "" || client_secret == "") 
@@ -408,7 +431,7 @@ namespace NAuthAPI.Controllers
         }
         private string CreateIdToken(IEnumerable<Claim> claims, SymmetricSecurityKey key)
         {
-            claims.Append(new Claim("token", "id", ClaimValueTypes.String, _issuer));
+            claims.Append(new Claim("scope", "id", ClaimValueTypes.String, _issuer));
             var token = CreateToken(claims, key, TimeSpan.FromHours(10));
             return token;
         }
@@ -416,7 +439,7 @@ namespace NAuthAPI.Controllers
         {
             var claims = new List<Claim>() { 
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
-                new Claim("token", "refresh", ClaimValueTypes.String, _issuer)
+                new Claim("scope", "refresh", ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromDays(14));
             return token;
@@ -425,8 +448,7 @@ namespace NAuthAPI.Controllers
         {
             var claims = new List<Claim>() {
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
-                new Claim("scope", scope, ClaimValueTypes.String, _issuer),
-                new Claim("token", "access", ClaimValueTypes.String, _issuer)
+                new Claim("scope", scope, ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromHours(1));
             return token;
@@ -444,5 +466,6 @@ namespace NAuthAPI.Controllers
             var token = new JwtSecurityTokenHandler().WriteToken(jwt);
             return token;
         }
+        #endregion
     }
 }
