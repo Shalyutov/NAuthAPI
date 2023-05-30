@@ -108,7 +108,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$username", YdbValue.MakeUtf8(username) }
+                { "$user", YdbValue.MakeUtf8(username) }
             };
             var queryResponse = await ExecuteQuery(Queries.DeleteUserKeys, parameters);
             return queryResponse.Status.IsSuccess;
@@ -137,7 +137,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$username", YdbValue.MakeUtf8(username) }
+                { "$user", YdbValue.MakeUtf8(username) }
             };
             var queryResponse = await ExecuteQuery(Queries.GetUserKeys, parameters);
             var sets = queryResponse.Result.ResultSets;

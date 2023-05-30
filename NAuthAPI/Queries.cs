@@ -51,7 +51,7 @@
         WHERE 
             user = $user;";
         public static string GetUserKeys = @"
-        DECLARE $username AS Utf8;
+        DECLARE $user AS Utf8;
         SELECT
             kid
         FROM
