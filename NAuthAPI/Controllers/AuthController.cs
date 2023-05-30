@@ -174,8 +174,8 @@ namespace NAuthAPI.Controllers
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
             if (user != null)
             {
-                Dictionary<string, object> claims = new();
-                foreach (var item in form) claims.Add(item.Key, item.Value);
+                Dictionary<string, string> claims = new();
+                foreach (var item in form) claims.Add(item.Key, item.Value.First() ?? "");
                 
                 var result = await _database.UpdateAccount(user, claims);
                 if (result) 
@@ -262,7 +262,8 @@ namespace NAuthAPI.Controllers
             if (!scope.Contains("refresh"))
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
 
-            var token = await HttpContext.GetTokenAsync(JwtBearerDefaults.AuthenticationScheme, "access_token");
+            var token = auth.Ticket?.Properties.GetTokenValue("access_token") ?? "";
+
             var handler = new JwtSecurityTokenHandler();
             var id = handler.ReadJwtToken(token).Header.Kid;
             

@@ -38,7 +38,7 @@ namespace NAuthAPI
                 new Claim(ClaimTypes.Name, row["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.SerialNumber, row["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim("LastName", row["lastname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.MobilePhone, row["phone"].GetOptionalUint64().ToString() ?? "", ClaimValueTypes.Integer64, _issuer),
+                new Claim(ClaimTypes.MobilePhone, row["phone"].GetOptionalUint64().ToString() ?? "", ClaimValueTypes.UInteger64, _issuer),
                 new Claim(ClaimTypes.Email, row["email"].GetOptionalUtf8() ?? "", ClaimValueTypes.Email, _issuer)
             };
             string hash = row["hash"].GetOptionalUtf8() ?? "";
@@ -159,7 +159,7 @@ namespace NAuthAPI
                 throw new ApplicationException("Пустой ответ от базы данных");
             }
         }
-        public async Task<bool> UpdateAccount(string username, Dictionary<string, object> claims)
+        public async Task<bool> UpdateAccount(string username, Dictionary<string, string> claims)
         {
             if (claims.Count == 0) return true;
             StringBuilder queryBuilder = new();
@@ -175,12 +175,12 @@ namespace NAuthAPI
             {
                 if (stringScopes.Split(" ").Contains(record.Key))
                 {
-                    parameters.Add($"${record.Key}", YdbValue.MakeUtf8((string)record.Value));
+                    parameters.Add($"${record.Key}", YdbValue.MakeUtf8(record.Value));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Utf8;");
                 }
                 else if (uint64Scopes.Split(" ").Contains(record.Key))
                 {
-                    parameters.Add($"${record.Key}", YdbValue.MakeUint64((UInt64)record.Value));
+                    parameters.Add($"${record.Key}", YdbValue.MakeUint64(UInt64.Parse(record.Value)));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Uint64;");
                 }
                 else
