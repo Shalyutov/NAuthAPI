@@ -13,7 +13,7 @@ namespace NAuthAPI.Controllers
         [HttpGet("version")]
         public IActionResult Version()
         {
-            return Ok("0.0.2.2");
+            return Ok("0.0.2.3");
         }
     }
 }

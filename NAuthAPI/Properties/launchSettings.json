@@ -13,7 +13,7 @@
     "https": {
       "commandName": "Project",
       "launchBrowser": true,
-      "launchUrl": "auth/api/db/status",
+      "launchUrl": "auth/db/status",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "Pepper": "AMdjr86#675y=kdfnfg"

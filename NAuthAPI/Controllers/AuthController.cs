@@ -262,8 +262,8 @@ namespace NAuthAPI.Controllers
             if (!scope.Contains("refresh"))
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
 
-            var token = auth.Ticket?.Properties.GetTokenValue("access_token") ?? "";
-
+            var token = auth.Ticket?.Properties.GetTokens().First().Value;
+            
             var handler = new JwtSecurityTokenHandler();
             var id = handler.ReadJwtToken(token).Header.Kid;
             
@@ -271,7 +271,7 @@ namespace NAuthAPI.Controllers
             if (isValid)
             {
                 DeleteSecurityKey(id);
-                await _database.DeleteAuthKey(id);
+                var s = await _database.DeleteAuthKey(id);
                 var key = await CreateSecurityKey();
                 string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
                 await _database.CreateAuthKey(key.KeyId, _audience, guid);
@@ -290,8 +290,8 @@ namespace NAuthAPI.Controllers
             }
         }
         [Authorize]
-        [HttpGet("token/revoke")]
-        public async Task<ActionResult> Revoke([FromHeader] string client_id, [FromHeader] string client_secret, [FromForm] string kid)
+        [HttpGet("signout/this")]
+        public async Task<ActionResult> Revoke([FromHeader] string client_id, [FromHeader] string client_secret)
         {
             if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
@@ -301,14 +301,23 @@ namespace NAuthAPI.Controllers
 
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
-            if (!scope.Contains("user"))
+            if (!scope.Contains("refresh"))
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
-
+            var token = auth.Properties?.GetTokens().First().Value;
+            var handler = new JwtSecurityTokenHandler();
+            var kid = handler.ReadJwtToken(token).Header.Kid;
             try
             {
                 DeleteSecurityKey(kid);
-                await _database.DeleteAuthKey(kid);
-                return Ok();
+                var res = await _database.DeleteAuthKey(kid);
+                if (res)
+                {
+                    return Ok();
+                }
+                else
+                {
+                    return Problem();
+                }
             }
             catch (Exception)
             {
@@ -327,7 +336,7 @@ namespace NAuthAPI.Controllers
 
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
-            if (!scope.Contains("user"))
+            if (!scope.Contains("refresh"))
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
 
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
@@ -336,8 +345,15 @@ namespace NAuthAPI.Controllers
             {
                 var keys = await _database.GetUserKeys(user);
                 foreach (var key in keys) DeleteSecurityKey(key);
-                await _database.DeleteUserAuthKeys(user);
-                return Ok();
+                var res = await _database.DeleteUserAuthKeys(user);
+                if (res)
+                {
+                    return Ok();
+                }
+                else
+                {
+                    return Problem();
+                }
             }
             catch (Exception)
             {
