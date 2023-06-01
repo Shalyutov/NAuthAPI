@@ -84,7 +84,7 @@
             users
         WHERE 
             username = $id;";
-        public static string CreateIdentity = @"
+        public static string CreateAccount = @"
         DECLARE $id As Utf8;
         DECLARE $username AS Utf8;
         DECLARE $surname AS Utf8;
@@ -92,10 +92,13 @@
         DECLARE $lastname AS Utf8;
         DECLARE $hash AS Utf8;
         DECLARE $salt AS Utf8;
+        DECLARE $email AS Utf8;
+        DECLARE $phone AS Uint64;
+        DECLARE $gender AS Utf8;
         INSERT INTO 
-            users (guid, username, surname, name, lastname, hash, salt) 
+            users (guid, username, surname, name, lastname, hash, salt, email, phone, gender) 
         VALUES
-            ($id, $username, $surname, $name, $lastname, $hash, $salt);";
+            ($id, $username, $surname, $name, $lastname, $hash, $salt, $email, $phone, $gender);";
         public static string CreateSignIn = @"
         DECLARE $id As Utf8;
         DECLARE $user AS Utf8;
@@ -104,6 +107,12 @@
             keys (kid, user, audience) 
         VALUES
             ($id, $user, $audience);";
-
+        public static string DeleteAccount = @"
+        DECLARE $id As Utf8;
+        DEELTE FROM
+            users
+        WHERE
+            guid = $id;
+        ";
     }
 }

@@ -43,7 +43,7 @@ namespace NAuthAPI.Controllers
                 return Problem(ex.Message);
             }
         }
-        [HttpPut("account/update")]
+        [HttpPut("account")]
         public async Task<ActionResult> UpdateAccount([FromHeader] string client_id, [FromHeader] string client_secret)
         {
             if (!IsDBInitialized)
@@ -55,7 +55,8 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Запрос не представляет форму для измененния данных");
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? string.Empty;
-            if (!scope.Contains("user")) return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            if (!scope.Contains("user")) 
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             var form = await HttpContext.Request.ReadFormAsync();
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
             if (user != null)
@@ -77,6 +78,26 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Авторизованный ключ не содержит имени пользователя");
             }
+        }
+        [HttpDelete("account")]
+        public async Task<ActionResult> DeleteUser([FromHeader] string client_id, [FromHeader] string client_secret)
+        {
+            if (!IsDBInitialized)
+                return Problem("Драйвер базы данных не инициализирован");
+            var client = await Client.GetClientAsync(_database, client_id, client_secret);
+            if (client == null)
+                return BadRequest("Клиентское приложение не авторизовано");
+            var auth = await HttpContext.AuthenticateAsync();
+            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? string.Empty;
+            if (!scope.Contains("user")) 
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            var guid = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+            var delete_result = await _database.DeleteAccount(guid);
+            await _database.DeleteUserAuthKeys(guid);
+            if (delete_result)
+                return Ok();
+            else
+                return Problem("Не удалось удалить учётную запись");
         }
         [AllowAnonymous]
         [HttpGet("account/exists")]

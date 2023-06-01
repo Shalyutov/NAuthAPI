@@ -39,7 +39,8 @@ namespace NAuthAPI
                 new Claim(ClaimTypes.SerialNumber, row["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim("LastName", row["lastname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.MobilePhone, row["phone"].GetOptionalUint64().ToString() ?? "", ClaimValueTypes.UInteger64, _issuer),
-                new Claim(ClaimTypes.Email, row["email"].GetOptionalUtf8() ?? "", ClaimValueTypes.Email, _issuer)
+                new Claim(ClaimTypes.Email, row["email"].GetOptionalUtf8() ?? "", ClaimValueTypes.Email, _issuer),
+                new Claim(ClaimTypes.Gender, row["gender"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer)
             };
             string hash = row["hash"].GetOptionalUtf8() ?? "";
             string salt = row["salt"].GetOptionalUtf8() ?? "";
@@ -81,9 +82,12 @@ namespace NAuthAPI
                 { "$name", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Name)?.Value ?? "") },
                 { "$lastname", YdbValue.MakeUtf8(account.Identity.FindFirst("LastName")?.Value ?? "") },
                 { "$hash", YdbValue.MakeUtf8(account.Hash) },
-                { "$salt", YdbValue.MakeUtf8(account.Salt) }
+                { "$salt", YdbValue.MakeUtf8(account.Salt) },
+                { "$gender", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Gender)?.Value ?? "") },
+                { "$email", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Email)?.Value ?? "") },
+                { "$phone", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.MobilePhone)?.Value ?? "") }
             };
-            var queryResponse = await ExecuteQuery(Queries.CreateIdentity, parameters);
+            var queryResponse = await ExecuteQuery(Queries.CreateAccount, parameters);
             return queryResponse.Status.IsSuccess;
         }
         public async Task<bool> CreateAuthKey(string keyId, string audience, string username)
@@ -106,11 +110,11 @@ namespace NAuthAPI
             var queryResponse = await ExecuteQuery(Queries.DeleteKey, parameters);
             return queryResponse.Status.IsSuccess;
         }
-        public async Task<bool> DeleteUserAuthKeys(string username)
+        public async Task<bool> DeleteUserAuthKeys(string user)
         {
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$user", YdbValue.MakeUtf8(username) }
+                { "$user", YdbValue.MakeUtf8(user) }
             };
             var queryResponse = await ExecuteQuery(Queries.DeleteUserKeys, parameters);
             return queryResponse.Status.IsSuccess;
@@ -171,16 +175,16 @@ namespace NAuthAPI
                 { "$id", YdbValue.MakeUtf8(username) }
             };
             queryBuilder.AppendLine($"DECLARE $id AS Utf8;");
-            var stringScopes = "surname name lastname email gender";
-            var uint64Scopes = "phone";
+            var stringScopes = "surname name lastname email gender".Split(" ");
+            var uint64Scopes = "phone".Split(" ");
             foreach (var record in claims)
             {
-                if (stringScopes.Split(" ").Contains(record.Key))
+                if (stringScopes.Contains(record.Key))
                 {
                     parameters.Add($"${record.Key}", YdbValue.MakeUtf8(record.Value));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Utf8;");
                 }
-                else if (uint64Scopes.Split(" ").Contains(record.Key))
+                else if (uint64Scopes.Contains(record.Key))
                 {
                     parameters.Add($"${record.Key}", YdbValue.MakeUint64(ulong.Parse(record.Value)));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Uint64;");
@@ -240,6 +244,15 @@ namespace NAuthAPI
                 { "$id", YdbValue.MakeUtf8(user) }
             };
             var response = await ExecuteQuery(Queries.AddAttempt, parameters);
+            return response.Status.IsSuccess;
+        }
+        public async Task<bool> DeleteAccount(string user)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$id", YdbValue.MakeUtf8(user) }
+            };
+            var response = await ExecuteQuery(Queries.DeleteAccount, parameters);
             return response.Status.IsSuccess;
         }
         public async Task<ExecuteDataQueryResponse> ExecuteQuery(string query, Dictionary<string, YdbValue> parameters)

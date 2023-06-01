@@ -113,20 +113,23 @@ namespace NAuthAPI.Controllers
             if (!HttpContext.Request.HasFormContentType)
                 return BadRequest("Нет утверждений для изменения");
             var form = await HttpContext.Request.ReadFormAsync();
-            if (form["username"] == "" || form["name"] == "" || form["password"] == "") 
-                return BadRequest();
+            if (form["username"] == "" || form["password"] == "") 
+                return BadRequest("Нельзя создать учётную запись без идентификатора и пароля");
 
             string guid = Guid.NewGuid().ToString();
             var salt = CreateSalt();
-            string hash = Convert.ToBase64String(await HashPassword(form["password"][0] ?? "", guid, salt));
+            string hash = Convert.ToBase64String(await HashPassword(form["password"].First() ?? "", guid, salt));
 
             var claims = new List<Claim>()
             {
-                new Claim(ClaimTypes.Upn, form["username"][0] ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.Surname, form["surname"][0] ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.Name, form["name"][0] ?? "", ClaimValueTypes.String, _issuer),
-                new Claim("LastName", form["lastname"][0] ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer)
+                new Claim(ClaimTypes.Upn, form["username"].First() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Surname, form["surname"].First() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Name, form["name"].First() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim("LastName", form["lastname"].First() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Email, form["email"].First() ?? "", ClaimValueTypes.Email, _issuer),
+                new Claim(ClaimTypes.MobilePhone, form["phone"].First() ?? "", ClaimValueTypes.UInteger64, _issuer),
+                new Claim(ClaimTypes.Gender, form["gender"].First() ?? "", ClaimValueTypes.String, _issuer)
             };
             ClaimsIdentity identity = new(claims);
             Account account = new(identity, hash, Convert.ToBase64String(salt), false, 0);
