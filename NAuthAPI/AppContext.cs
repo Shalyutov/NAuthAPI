@@ -85,7 +85,7 @@ namespace NAuthAPI
                 { "$salt", YdbValue.MakeUtf8(account.Salt) },
                 { "$gender", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Gender)?.Value ?? "") },
                 { "$email", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Email)?.Value ?? "") },
-                { "$phone", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.MobilePhone)?.Value ?? "") }
+                { "$phone", YdbValue.MakeUint64(ulong.Parse(account.Identity.FindFirst(ClaimTypes.MobilePhone)?.Value ?? "0")) }
             };
             var queryResponse = await ExecuteQuery(Queries.CreateAccount, parameters);
             return queryResponse.Status.IsSuccess;

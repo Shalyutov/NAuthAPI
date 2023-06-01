@@ -109,7 +109,7 @@
             ($id, $user, $audience);";
         public static string DeleteAccount = @"
         DECLARE $id As Utf8;
-        DEELTE FROM
+        DELETE FROM
             users
         WHERE
             guid = $id;

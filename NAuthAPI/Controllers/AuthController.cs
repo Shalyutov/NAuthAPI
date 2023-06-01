@@ -73,7 +73,8 @@ namespace NAuthAPI.Controllers
                 if (IsHashValid(hash, account.Hash))
                 {
                     await _database.NullAttempt(guid);
-                    var key = await CreateSecurityKey();
+                    var bytes = CreateRandBytes(32);
+                    var key = await CryptoIO.CreateSecurityKey(bytes);
                     var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, _audience, guid);
                     if (isKeyRegistered)
                     {
@@ -108,13 +109,15 @@ namespace NAuthAPI.Controllers
             var client = await Client.GetClientAsync(_database, client_id, client_secret);
             if (client == null)
                 return BadRequest("Клиентское приложение не авторизовано");
-            if (client.IsImplementation) 
+            if (!client.IsImplementation) 
                 return BadRequest("Клиент не имеет доверенной реализации потока системы");
             if (!HttpContext.Request.HasFormContentType)
                 return BadRequest("Нет утверждений для изменения");
             var form = await HttpContext.Request.ReadFormAsync();
-            if (form["username"] == "" || form["password"] == "") 
+            if (!form.ContainsKey("username") || !form.ContainsKey("password"))
                 return BadRequest("Нельзя создать учётную запись без идентификатора и пароля");
+            if (form["username"] == "" || form["password"] == "") 
+                return BadRequest("Нельзя создать учётную запись с пустыми идентификатором и паролем");
 
             string guid = Guid.NewGuid().ToString();
             var salt = CreateSalt();
@@ -123,18 +126,40 @@ namespace NAuthAPI.Controllers
             var claims = new List<Claim>()
             {
                 new Claim(ClaimTypes.Upn, form["username"].First() ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.Surname, form["surname"].First() ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.Name, form["name"].First() ?? "", ClaimValueTypes.String, _issuer),
-                new Claim("LastName", form["lastname"].First() ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.Email, form["email"].First() ?? "", ClaimValueTypes.Email, _issuer),
-                new Claim(ClaimTypes.MobilePhone, form["phone"].First() ?? "", ClaimValueTypes.UInteger64, _issuer),
-                new Claim(ClaimTypes.Gender, form["gender"].First() ?? "", ClaimValueTypes.String, _issuer)
+                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer)
             };
+            foreach(var formKey in form.Keys)
+            {
+                if (string.IsNullOrEmpty(formKey)) continue;
+                Claim? claim = null;
+                switch (formKey)
+                {
+                    case "surname":
+                        claim = new Claim(ClaimTypes.Surname, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
+                        break;
+                    case "name":
+                        claim = new Claim(ClaimTypes.Name, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
+                        break;
+                    case "lastname":
+                        claim = new Claim("LastName", form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
+                        break;
+                    case "email":
+                        claim = new Claim(ClaimTypes.Email, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
+                        break;
+                    case "gender":
+                        claim = new Claim(ClaimTypes.Gender, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
+                        break;
+                    case "phone":
+                        claim = new Claim(ClaimTypes.MobilePhone, form[formKey].First() ?? "", ClaimValueTypes.UInteger64, _issuer);
+                        break;
+                };
+                if (claim != null) claims.Add(claim);
+            }
             ClaimsIdentity identity = new(claims);
             Account account = new(identity, hash, Convert.ToBase64String(salt), false, 0);
 
-            var key = await CreateSecurityKey();
+            var bytes = CreateRandBytes(32);
+            var key = await CryptoIO.CreateSecurityKey(bytes);
             var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, _audience, guid);
 
             var isAccountCreated = await _database.CreateAccount(account);
@@ -180,10 +205,11 @@ namespace NAuthAPI.Controllers
             var isValid = await _database.IsKeyValid(id);
             if (isValid)
             {
-                DeleteSecurityKey(id);
+                CryptoIO.DeleteSecurityKey(id);
                 var db_res = await _database.DeleteAuthKey(id);
                 if (!db_res) return Problem("Запрос к базе данных не выполнен");
-                var key = await CreateSecurityKey();
+                var bytes = CreateRandBytes(32);
+                var key = await CryptoIO.CreateSecurityKey(bytes);
                 string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
                 await _database.CreateAuthKey(key.KeyId, _audience, guid);
                 string access = CreateAccessToken(guid, key, "user");
@@ -218,7 +244,7 @@ namespace NAuthAPI.Controllers
             var kid = handler.ReadJwtToken(token).Header.Kid;
             try
             {
-                DeleteSecurityKey(kid);
+                CryptoIO.DeleteSecurityKey(kid);
                 var res = await _database.DeleteAuthKey(kid);
                 if (res)
                 {
@@ -253,7 +279,7 @@ namespace NAuthAPI.Controllers
             try
             {
                 var keys = await _database.GetUserKeys(user);
-                foreach (var key in keys) DeleteSecurityKey(key);
+                foreach (var key in keys) CryptoIO.DeleteSecurityKey(key);
                 var res = await _database.DeleteUserAuthKeys(user);
                 if (res)
                 {
@@ -305,20 +331,6 @@ namespace NAuthAPI.Controllers
             return hash;
         }
         private static bool IsHashValid(byte[] hash, string db_hash) => hash.SequenceEqual(Convert.FromBase64String(db_hash));
-        private static async Task<SymmetricSecurityKey> CreateSecurityKey()
-        {
-            var bytes = CreateRandBytes(32);
-            var key = new SymmetricSecurityKey(bytes)
-            {
-                KeyId = Guid.NewGuid().ToString()
-            };
-            await System.IO.File.WriteAllTextAsync($"keys/{key.KeyId}.key", Convert.ToBase64String(key.Key));
-            return key;
-        }
-        private static void DeleteSecurityKey(string keyId)
-        {
-            System.IO.File.Delete($"keys/{keyId}.key");
-        }
         private string CreateIdToken(IEnumerable<Claim> claims, SymmetricSecurityKey key)
         {
             _ = claims.Append(new Claim("scope", "id", ClaimValueTypes.String, _issuer));

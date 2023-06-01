@@ -93,6 +93,8 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             var guid = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             var delete_result = await _database.DeleteAccount(guid);
+            var keys = await _database.GetUserKeys(guid);
+            foreach (var key in keys) CryptoIO.DeleteSecurityKey(key);
             await _database.DeleteUserAuthKeys(guid);
             if (delete_result)
                 return Ok();
