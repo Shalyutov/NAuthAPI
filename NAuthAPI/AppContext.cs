@@ -43,10 +43,12 @@ namespace NAuthAPI
             };
             string hash = row["hash"].GetOptionalUtf8() ?? "";
             string salt = row["salt"].GetOptionalUtf8() ?? "";
+            bool blocked = row["blocked"].GetOptional()?.GetBool() ?? true;
+            ushort attempt = row["attempt"].GetOptionalUint8() ?? 0;
 
             ClaimsIdentity identity = new(claims, "Bearer");
 
-            Account account = new(identity, hash, salt);
+            Account account = new(identity, hash, salt, blocked, attempt);
             return account;
         }
         public async Task<bool> IsUsernameExists(string username)
@@ -180,7 +182,7 @@ namespace NAuthAPI
                 }
                 else if (uint64Scopes.Split(" ").Contains(record.Key))
                 {
-                    parameters.Add($"${record.Key}", YdbValue.MakeUint64(UInt64.Parse(record.Value)));
+                    parameters.Add($"${record.Key}", YdbValue.MakeUint64(ulong.Parse(record.Value)));
                     queryBuilder.AppendLine($"DECLARE ${record.Key} AS Uint64;");
                 }
                 else
@@ -198,8 +200,8 @@ namespace NAuthAPI
                 return true;
             }
             queryBuilder.AppendLine($"UPDATE users SET {bindings.ToString()} WHERE guid = $id");
-            var queryResponse = await ExecuteQuery(queryBuilder.ToString(), parameters);
-            return queryResponse.Status.IsSuccess;
+            var response = await ExecuteQuery(queryBuilder.ToString(), parameters);
+            return response.Status.IsSuccess;
         }
         public async Task<Client?> GetClient(string name)
         {
@@ -221,6 +223,24 @@ namespace NAuthAPI
                 row["scopes"].GetOptionalUtf8());
 
             return client;
+        }
+        public async Task<bool> NullAttempt(string user)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$id", YdbValue.MakeUtf8(user) }
+            };
+            var response = await ExecuteQuery(Queries.NullAttempt, parameters);
+            return response.Status.IsSuccess;
+        }
+        public async Task<bool> AddAttempt(string user)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$id", YdbValue.MakeUtf8(user) }
+            };
+            var response = await ExecuteQuery(Queries.AddAttempt, parameters);
+            return response.Status.IsSuccess;
         }
         public async Task<ExecuteDataQueryResponse> ExecuteQuery(string query, Dictionary<string, YdbValue> parameters)
         {

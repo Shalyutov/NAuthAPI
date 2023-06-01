@@ -7,12 +7,16 @@ namespace NAuthAPI
         public ClaimsIdentity Identity { get; set; }
         public string Hash { get; set; }
         public string Salt { get; set; }
+        public bool IsBlocked { get; set; }
+        public ushort Attempts { get; set; }
 
-        public Account(ClaimsIdentity identity, string hash, string salt)
+        public Account(ClaimsIdentity identity, string hash, string salt, bool isBlocked, ushort attempts)
         {
             Identity = identity;
             Hash = hash;
             Salt = salt;
+            IsBlocked = isBlocked;
+            Attempts = attempts;
         }
     }
 }

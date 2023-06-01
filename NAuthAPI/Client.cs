@@ -16,5 +16,21 @@
             IsImplementation = isImplementation;
             Scopes = scopes;
         }
+        public static async Task<Client?> GetClientAsync(AppContext _database, string client_id, string client_secret)
+        {
+            if (client_id == "" || client_secret == "")
+                return null;
+            if (_database == null)
+                return null;
+
+            var client = await _database.GetClient(client_id);
+            if (client == null)
+                return null;
+
+            if (client.Secret == client_secret && client.IsValid)
+                return client;
+            else
+                return null;
+        }
     }
 }

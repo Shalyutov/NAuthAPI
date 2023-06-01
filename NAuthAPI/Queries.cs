@@ -2,10 +2,28 @@
 {
     class Queries
     {
+        public static string NullAttempt = @"
+        DECLARE $id AS Utf8;
+        UPDATE
+            users
+        SET
+            attempt = CAST(0 as Uint8)
+        WHERE
+            guid = $id;
+        ";
+        public static string AddAttempt = @"
+        DECLARE $id AS Utf8;
+        UPDATE
+            users
+        SET
+            attempt = attempt + CAST(1 as Uint8)
+        WHERE
+            guid = $id;
+        ";
         public static string GetIdentity = @"
         DECLARE $id AS Utf8;
         SELECT
-            hash, name, surname, guid, salt, lastname, email, phone
+            hash, name, surname, guid, salt, lastname, email, phone, blocked, attempt
         FROM
             users
         WHERE 
