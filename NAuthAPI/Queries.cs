@@ -27,7 +27,7 @@
         FROM
             users
         WHERE 
-            guid = $id;";
+            username = $id;";
         public static string GetClient = @"
         DECLARE $id AS Utf8;
         SELECT

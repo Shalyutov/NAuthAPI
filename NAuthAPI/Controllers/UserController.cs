@@ -28,7 +28,7 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Клиентское приложение не авторизовано");
             try
             {
-                Account? account = await _database.GetAccount(HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "");
+                Account? account = await _database.GetAccount(HttpContext.User.FindFirst(ClaimTypes.Upn)?.Value ?? "");
                 if (account != null)
                 {
                     Dictionary<string, string> claims = new();

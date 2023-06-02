@@ -79,7 +79,7 @@ namespace NAuthAPI.Controllers
                     if (isKeyRegistered)
                     {
                         var id = CreateIdToken(account.Identity.Claims, key);
-                        var refresh = CreateRefreshToken(guid, key);
+                        var refresh = CreateRefreshToken(guid, username, key);
                         var result = new
                         {
                             id_token = id,
@@ -167,8 +167,9 @@ namespace NAuthAPI.Controllers
             {
                 if (isKeyRegistered)
                 {
+                    string user = identity.FindFirst(ClaimTypes.Upn)?.Value ?? "";
                     string id = CreateIdToken(account.Identity.Claims, key);
-                    string refresh = CreateRefreshToken(guid, key);
+                    string refresh = CreateRefreshToken(guid, user, key);
                     var result = new
                     {
                         id_token = id,
@@ -211,9 +212,10 @@ namespace NAuthAPI.Controllers
                 var bytes = CreateRandBytes(32);
                 var key = await CryptoIO.CreateSecurityKey(bytes);
                 string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+                string user = auth.Principal?.FindFirstValue(ClaimTypes.Upn) ?? "";
                 await _database.CreateAuthKey(key.KeyId, _audience, guid);
-                string access = CreateAccessToken(guid, key, "user");
-                string refresh = CreateRefreshToken(guid, key);
+                string access = CreateAccessToken(guid, user, key, "user");
+                string refresh = CreateRefreshToken(guid, user, key);
                 var result = new
                 {
                     access_token = access,
@@ -337,19 +339,21 @@ namespace NAuthAPI.Controllers
             var token = CreateToken(claims, key, TimeSpan.FromHours(10));
             return token;
         }
-        private string CreateRefreshToken(string guid, SymmetricSecurityKey key)
+        private string CreateRefreshToken(string guid, string username, SymmetricSecurityKey key)
         {
             var claims = new List<Claim>() { 
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
                 new Claim("scope", "refresh", ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromDays(14));
             return token;
         }
-        private string CreateAccessToken(string guid, SymmetricSecurityKey key, string scope)
+        private string CreateAccessToken(string guid, string username, SymmetricSecurityKey key, string scope)
         {
             var claims = new List<Claim>() {
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
                 new Claim("scope", scope, ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromHours(1));
