@@ -95,10 +95,12 @@
         DECLARE $email AS Utf8;
         DECLARE $phone AS Uint64;
         DECLARE $gender AS Utf8;
+        DECLARE $attempt AS Uint8;
+        DECLARE $blocked AS Uint8;
         INSERT INTO 
-            users (guid, username, surname, name, lastname, hash, salt, email, phone, gender) 
+            users (guid, username, surname, name, lastname, hash, salt, email, phone, gender, attempt, blocked) 
         VALUES
-            ($id, $username, $surname, $name, $lastname, $hash, $salt, $email, $phone, $gender);";
+            ($id, $username, $surname, $name, $lastname, $hash, $salt, $email, $phone, $gender, $attempt, CAST($blocked AS Bool));";
         public static string CreateSignIn = @"
         DECLARE $id As Utf8;
         DECLARE $user AS Utf8;

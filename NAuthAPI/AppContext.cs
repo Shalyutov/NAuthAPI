@@ -45,7 +45,7 @@ namespace NAuthAPI
             string hash = row["hash"].GetOptionalUtf8() ?? "";
             string salt = row["salt"].GetOptionalUtf8() ?? "";
             bool blocked = row["blocked"].GetOptional()?.GetBool() ?? true;
-            ushort attempt = row["attempt"].GetOptionalUint8() ?? 0;
+            byte attempt = row["attempt"].GetOptionalUint8() ?? 0;
 
             ClaimsIdentity identity = new(claims, "Bearer");
 
@@ -85,7 +85,9 @@ namespace NAuthAPI
                 { "$salt", YdbValue.MakeUtf8(account.Salt) },
                 { "$gender", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Gender)?.Value ?? "") },
                 { "$email", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Email)?.Value ?? "") },
-                { "$phone", YdbValue.MakeUint64(ulong.Parse(account.Identity.FindFirst(ClaimTypes.MobilePhone)?.Value ?? "0")) }
+                { "$phone", YdbValue.MakeUint64(ulong.Parse(account.Identity.FindFirst(ClaimTypes.MobilePhone)?.Value ?? "0")) },
+                { "$attempt", YdbValue.MakeUint8(account.Attempts) },
+                { "$blocked", YdbValue.MakeUint8(account.IsBlocked ? (byte)1 : (byte)0) }
             };
             var queryResponse = await ExecuteQuery(Queries.CreateAccount, parameters);
             return queryResponse.Status.IsSuccess;
