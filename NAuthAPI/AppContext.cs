@@ -58,7 +58,7 @@ namespace NAuthAPI
             {
                 { "$id", YdbValue.MakeUtf8(username) }
             };
-            var queryResponse = await ExecuteQuery(Queries.GetIdentity, parameters);
+            var queryResponse = await ExecuteQuery(Queries.GetUsername, parameters);
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count > 0)
             {
