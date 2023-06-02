@@ -18,7 +18,7 @@ namespace NAuthAPI.Controllers
         [HttpGet("version")]
         public IActionResult Version()
         {
-            return Ok("0.0.3.6");
+            return Ok("0.0.3.9");
         }
         [HttpGet("health")]
         public ActionResult DatabaseStatus()

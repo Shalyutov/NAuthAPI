@@ -33,7 +33,7 @@ namespace NAuthAPI
 
             List<Claim> claims = new()
             {
-                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
+                new Claim(ClaimTypes.Upn, row["username"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.Surname, row["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.Name, row["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.SerialNumber, row["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),

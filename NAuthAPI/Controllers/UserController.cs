@@ -28,10 +28,26 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Клиентское приложение не авторизовано");
             try
             {
-                Account? account = await _database.GetAccount(HttpContext.User.FindFirst(ClaimTypes.Upn)?.Value ?? "");
+                Account? account = await _database.GetAccount(HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "");
                 if (account != null)
                 {
-                    return Ok(account.Identity.Claims);
+                    Dictionary<string, string> claims = new();
+                    foreach(var claim in account.Identity.Claims)
+                    {
+                        string type = claim.Type switch
+                        {
+                            ClaimTypes.Upn => "username",
+                            ClaimTypes.Surname => "surname",
+                            ClaimTypes.Name => "name",
+                            ClaimTypes.Email => "email",
+                            ClaimTypes.MobilePhone => "phone",
+                            ClaimTypes.Gender => "gender",
+                            ClaimTypes.SerialNumber => "guid",
+                            _ => claim.Type
+                        };
+                        claims.Add(type, claim.Value);
+                    }
+                    return Ok(claims);
                 }
                 else
                 {

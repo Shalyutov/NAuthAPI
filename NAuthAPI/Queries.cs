@@ -23,11 +23,11 @@
         public static string GetIdentity = @"
         DECLARE $id AS Utf8;
         SELECT
-            hash, name, surname, guid, salt, lastname, email, phone, blocked, attempt
+            hash, name, surname, guid, salt, lastname, email, phone, blocked, attempt, gender, username
         FROM
             users
         WHERE 
-            username = $id;";
+            guid = $id;";
         public static string GetClient = @"
         DECLARE $id AS Utf8;
         SELECT
