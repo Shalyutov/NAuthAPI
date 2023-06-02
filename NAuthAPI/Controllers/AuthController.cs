@@ -150,7 +150,8 @@ namespace NAuthAPI.Controllers
                         claim = new Claim(ClaimTypes.Gender, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
                         break;
                     case "phone":
-                        claim = new Claim(ClaimTypes.MobilePhone, form[formKey].First() ?? "", ClaimValueTypes.UInteger64, _issuer);
+                        var phone = form[formKey].First() ?? "0";
+                        claim = new Claim(ClaimTypes.MobilePhone, string.IsNullOrEmpty(phone) ? "0" : phone, ClaimValueTypes.UInteger64, _issuer);
                         break;
                 };
                 if (claim != null) claims.Add(claim);
