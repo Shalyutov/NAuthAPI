@@ -24,10 +24,10 @@ string audience = builder.Configuration["Audience"] ?? "";
 
 ICredentialsProvider provider;
 
-if (keypath != "")//Используем авторизованный ключ доступа если он задан в настройках приложения
+if (keypath != "") //Используем авторизованный ключ доступа если он задан в настройках приложения
 {
     provider = new ServiceAccountProvider(keypath);
-    ((ServiceAccountProvider)provider).Initialize().Wait();
+    await ((ServiceAccountProvider)provider).Initialize();
 }
 else
 {
@@ -36,7 +36,7 @@ else
 
 var config = new DriverConfig(endpoint, database, provider);
 var driver = new Driver(config);
-driver.Initialize().Wait();
+await driver.Initialize();
 
 var TableClient = new TableClient(driver, new TableClientConfig());
 var Database = new NAuthAPI.AppContext(TableClient, issuer);
