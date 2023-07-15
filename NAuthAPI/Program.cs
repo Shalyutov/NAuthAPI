@@ -21,6 +21,8 @@ string endpoint = builder.Configuration["Endpoint"] ?? "";
 string database = builder.Configuration["Database"] ?? "";
 string issuer = builder.Configuration["Issuer"] ?? "";
 string audience = builder.Configuration["Audience"] ?? "";
+string lake = builder.Configuration["KeyLake"] ?? "";
+string auth = builder.Configuration["Auth"] ?? "";
 
 ICredentialsProvider provider;
 
@@ -41,6 +43,10 @@ await driver.Initialize();
 var TableClient = new TableClient(driver, new TableClientConfig());
 var Database = new NAuthAPI.AppContext(TableClient, issuer);
 
+var httpClient = new HttpClient();
+
+var LakeService = new KeyLakeService(httpClient, lake, issuer, "KeyLake", auth);
+
 builder.Services.AddControllers();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme,
@@ -53,6 +59,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 ValidateAudience = true,
                 ValidAudience = audience,
                 ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
                 IssuerSigningKeyValidator = (key, token, param) => {
                     return Database.IsKeyValid(key.KeyId).Result;
                 },
@@ -60,8 +67,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     var list = new List<SecurityKey>();
                     try
                     {
-                        var keystr = File.ReadAllText($"keys/{kid}.key");
-                        var key = new SymmetricSecurityKey(Convert.FromBase64String(keystr))
+                        var payload = LakeService.GetKey(kid).Result;
+                        var key = new SymmetricSecurityKey(Convert.FromBase64String(payload))
                         {
                             KeyId = kid
                         };
@@ -73,7 +80,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             };
         });
 builder.Services.AddAuthorization();
+builder.Services.AddHttpClient();
 builder.Services.AddSingleton(Database);
+builder.Services.AddSingleton(LakeService);
 builder.Configuration.AddEnvironmentVariables();
 
 var app = builder.Build();

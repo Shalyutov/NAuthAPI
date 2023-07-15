@@ -34,13 +34,15 @@ namespace NAuthAPI.Controllers
     public class AuthController : ControllerBase
     {
         readonly AppContext _database;
+        readonly KeyLakeService _lakeService;
         readonly string _pepper;
         readonly string _issuer;
         readonly string _audience;
         private bool IsDBInitialized => _database != null;
-        public AuthController(IConfiguration webconfig, AppContext db)
+        public AuthController(IConfiguration webconfig, AppContext db, KeyLakeService lakeService)
         {
             _database = db;
+            _lakeService = lakeService;
             _pepper = webconfig["Pepper"] ?? "";
             _issuer = webconfig["Issuer"] ?? "";
             _audience = webconfig["Audience"] ?? "";
@@ -73,9 +75,10 @@ namespace NAuthAPI.Controllers
                 if (IsHashValid(hash, account.Hash))
                 {
                     await _database.NullAttempt(guid);
-                    var bytes = CreateRandBytes(32);
-                    var key = await CryptoIO.CreateSecurityKey(bytes);
-                    var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, _audience, guid);
+                    string keyId = Guid.NewGuid().ToString();
+                    var payload = await _lakeService.CreateKey(keyId);
+                    var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
+                    var isKeyRegistered = await _database.CreateAuthKey(keyId, _audience, guid);
                     if (isKeyRegistered)
                     {
                         var id = CreateIdToken(account.Identity.Claims, key);
@@ -159,8 +162,9 @@ namespace NAuthAPI.Controllers
             ClaimsIdentity identity = new(claims);
             Account account = new(identity, hash, Convert.ToBase64String(salt), false, 0);
 
-            var bytes = CreateRandBytes(32);
-            var key = await CryptoIO.CreateSecurityKey(bytes);
+            string keyId = Guid.NewGuid().ToString();
+            var payload = await _lakeService.CreateKey(keyId);
+            var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
             var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, _audience, guid);
 
             var isAccountCreated = await _database.CreateAccount(account);
@@ -207,11 +211,13 @@ namespace NAuthAPI.Controllers
             var isValid = await _database.IsKeyValid(id);
             if (isValid)
             {
-                CryptoIO.DeleteSecurityKey(id);
+                var lake_res = await _lakeService.DeleteKey(id);
+                if (!lake_res) return Problem("Озеро ключей не удалило ключ");
                 var db_res = await _database.DeleteAuthKey(id);
                 if (!db_res) return Problem("Запрос к базе данных не выполнен");
-                var bytes = CreateRandBytes(32);
-                var key = await CryptoIO.CreateSecurityKey(bytes);
+                string keyId = Guid.NewGuid().ToString();
+                var payload = await _lakeService.CreateKey(keyId);
+                var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
                 string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
                 string user = auth.Principal?.FindFirstValue(ClaimTypes.Upn) ?? "";
                 await _database.CreateAuthKey(key.KeyId, _audience, guid);
@@ -247,9 +253,9 @@ namespace NAuthAPI.Controllers
             var kid = handler.ReadJwtToken(token).Header.Kid;
             try
             {
-                CryptoIO.DeleteSecurityKey(kid);
+                var lake_res = await _lakeService.DeleteKey(kid);
                 var res = await _database.DeleteAuthKey(kid);
-                if (res)
+                if (res && lake_res)
                 {
                     return Ok();
                 }
@@ -282,7 +288,7 @@ namespace NAuthAPI.Controllers
             try
             {
                 var keys = await _database.GetUserKeys(user);
-                foreach (var key in keys) CryptoIO.DeleteSecurityKey(key);
+                foreach (var key in keys) await _lakeService.DeleteKey(key);
                 var res = await _database.DeleteUserAuthKeys(user);
                 if (res)
                 {
@@ -307,8 +313,8 @@ namespace NAuthAPI.Controllers
         private static byte[] CreateRandBytes(int bytes)
         {
             var buffer = new byte[bytes];
-            var rng = RandomNumberGenerator.Create();
-            rng.GetBytes(buffer);
+            var generator = RandomNumberGenerator.Create();
+            generator.GetBytes(buffer);
             return buffer;
         }
         private async Task<byte[]> HashPassword(string password, string guid, byte[] salt)//OWASP

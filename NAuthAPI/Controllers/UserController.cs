@@ -12,10 +12,12 @@ namespace NAuthAPI.Controllers
     public class UserController : ControllerBase
     {
         readonly AppContext _database;
+        readonly KeyLakeService _lakeService;
         private bool IsDBInitialized => _database != null;
-        public UserController(AppContext db)
+        public UserController(AppContext db, KeyLakeService lakeService)
         {
             _database = db;
+            _lakeService = lakeService;
         }
         #region Endpoints Logic
         [HttpGet("account")]
@@ -110,7 +112,7 @@ namespace NAuthAPI.Controllers
             var guid = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             var delete_result = await _database.DeleteAccount(guid);
             var keys = await _database.GetUserKeys(guid);
-            foreach (var key in keys) CryptoIO.DeleteSecurityKey(key);
+            foreach (var key in keys) await _lakeService.DeleteKey(key);
             await _database.DeleteUserAuthKeys(guid);
             if (delete_result)
                 return Ok();
