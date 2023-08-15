@@ -21,44 +21,79 @@ namespace NAuthAPI.Controllers
         }
         #region Endpoints Logic
         [HttpGet("account")]
-        public async Task<ActionResult> GetAccount([FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> GetAccount([FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
-            try
             {
-                Account? account = await _database.GetAccount(HttpContext.User.FindFirst(ClaimTypes.Upn)?.Value ?? "");
-                if (account != null)
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+                
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client == null)
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+
+            string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+            string scope = HttpContext.User.FindFirst("scope")?.Value ?? "";
+            Account? account = await _database.GetAccountById(id);
+            if (account != null)
+            {
+                Dictionary<string, string> claims = new();
+                foreach (var claim in account.Identity.Claims)
                 {
-                    Dictionary<string, string> claims = new();
-                    foreach(var claim in account.Identity.Claims)
+                    string type = claim.Type switch
                     {
-                        string type = claim.Type switch
-                        {
-                            ClaimTypes.Upn => "username",
-                            ClaimTypes.Surname => "surname",
-                            ClaimTypes.Name => "name",
-                            ClaimTypes.Email => "email",
-                            ClaimTypes.MobilePhone => "phone",
-                            ClaimTypes.Gender => "gender",
-                            ClaimTypes.SerialNumber => "guid",
-                            _ => claim.Type
-                        };
+                        ClaimTypes.Upn => "username",
+                        ClaimTypes.Surname => "surname",
+                        ClaimTypes.Name => "name",
+                        ClaimTypes.Email => "email",
+                        ClaimTypes.MobilePhone => "phone",
+                        ClaimTypes.Gender => "gender",
+                        ClaimTypes.SerialNumber => "guid",
+                        _ => claim.Type
+                    };
+                    if (scope.Contains("user") ||
+                        scope.Contains($"user:{type}") ||
+                        scope.Contains($"user:{type}:get"))
+                    {
                         claims.Add(type, claim.Value);
                     }
-                    return Ok(claims);
                 }
-                else
-                {
-                    return NoContent();
-                }
+                return Ok(claims);
             }
-            catch (Exception ex)
+            else
             {
-                return Problem(ex.Message);
+                return NoContent();
+            }
+        }
+
+        [HttpGet("claims")]
+        public async Task<ActionResult> GetClaims([FromForm] string claims, [FromHeader] string client, [FromHeader] string secret)
+        {
+            if (!IsDBInitialized)
+            {
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client == null)
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+
+            string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+            List<string> validScopes = (HttpContext.User.FindFirst("scope")?.Value ?? "").Split(" ").ToList();
+            List<string> requiredScopes = claims.Split(" ").ToList();
+            
+            List<Claim> 
+            if (_claims.Count > 0)
+            {
+                return Ok(_claims);
+            }
+            else
+            {
+                return NoContent();
             }
         }
         [HttpPut("account")]
@@ -98,26 +133,47 @@ namespace NAuthAPI.Controllers
             }
         }
         [HttpDelete("account")]
-        public async Task<ActionResult> DeleteUser([FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> DeleteUser([FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
+            {
                 return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
-            var auth = await HttpContext.AuthenticateAsync();
-            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? string.Empty;
-            if (!scope.Contains("user")) 
-                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
-            var guid = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-            var delete_result = await _database.DeleteAccount(guid);
-            var keys = await _database.GetUserKeys(guid);
-            foreach (var key in keys) await _lakeService.DeleteKey(key);
-            await _database.DeleteUserAuthKeys(guid);
-            if (delete_result)
-                return Ok();
+            }
+                
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client != null)
+            {
+                if (_client.IsImplementation)
+                {
+                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
+                }
+            }
             else
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+
+            var scope = HttpContext.User.FindFirstValue("scope") ?? string.Empty;
+            if (!scope.Contains("user"))
+            {
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            }
+                
+            var id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+            
+            var keys = await _database.GetUserKeys(id);
+            foreach (var key in keys)
+                await _lakeService.DeleteKey(key);
+            await _database.DeleteUserAuthKeys(id);
+
+            if (await _database.DeleteAccount(id))
+            {
+                return Ok();
+            }
+            else
+            {
                 return Problem("Не удалось удалить учётную запись");
+            }
         }
         [AllowAnonymous]
         [HttpGet("account/exists")]

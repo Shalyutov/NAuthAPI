@@ -6,9 +6,9 @@
         public string? Secret { get; set; }
         public bool IsValid { get; set; }
         public bool IsImplementation { get; set; }
-        public string? Scopes { get; set; }
+        public List<string> Scopes { get; set; }
 
-        public Client(string? name, string? secret, bool isValid, bool isImplementation, string? scopes)
+        public Client(string? name, string? secret, bool isValid, bool isImplementation, List<string> scopes)
         {
             Name = name;
             Secret = secret;

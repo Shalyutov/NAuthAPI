@@ -47,46 +47,61 @@ namespace NAuthAPI.Controllers
             _issuer = webconfig["Issuer"] ?? "";
             _audience = webconfig["Audience"] ?? "";
         }
+
         #region Endpoints Logic
+
         [AllowAnonymous]
         [HttpPost("signin")]
-        public async Task<ActionResult> SignIn([FromForm] string username, [FromForm] string password, [FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> SignIn([FromForm] string username, [FromForm] string password, [FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
-            if (!client.IsImplementation) 
-                return BadRequest("Клиент не имеет доверенной реализации потока системы");
-            if (username == "" || password == "")
-                return BadRequest("Нет данных для авторизации");
-            try
             {
-                Account? account = await _database.GetAccount(username);
-                if (account == null)
-                    return Unauthorized("Неправильный логин или пароль");
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+                
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client != null)
+            {
+                if (_client.IsImplementation)
+                {
+                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
+                }
+            }
+            else
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            {
+                return BadRequest("Невозможно выполнить вход с пустыми идентификатором и паролем");
+            }
+
+            Account? account = await _database.GetAccountByUsername(username);
+            if (account != null)
+            {
                 if (account.IsBlocked)
+                {
                     return Forbid();
+                }
                 if (account.Attempts > 2)
+                {
                     return Forbid();
-                var guid = account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-                var hash = await HashPassword(password, guid, Convert.FromBase64String(account.Salt));
+                }
+                string id = account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+                byte[] hash = await HashPassword(password, id, Convert.FromBase64String(account.Salt));
                 if (IsHashValid(hash, account.Hash))
                 {
-                    await _database.NullAttempt(guid);
+                    await _database.NullAttempt(id);
                     string keyId = Guid.NewGuid().ToString();
                     var payload = await _lakeService.CreateKey(keyId);
                     var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                    var isKeyRegistered = await _database.CreateAuthKey(keyId, _audience, guid);
-                    if (isKeyRegistered)
+                    if (await _database.CreateAuthKey(keyId, _audience, id))
                     {
-                        var id = CreateIdToken(account.Identity.Claims, key);
-                        var refresh = CreateRefreshToken(guid, username, key);
                         var result = new
                         {
-                            id_token = id,
-                            refresh_token = refresh
+                            id_token = CreateIdToken(account.Identity.Claims, key),
+                            refresh_token = CreateRefreshToken(id, key)
                         };
                         return Ok(result);
                     }
@@ -94,91 +109,120 @@ namespace NAuthAPI.Controllers
                 }
                 else
                 {
-                    await _database.AddAttempt(guid);
+                    await _database.AddAttempt(id);
                     return Unauthorized("Неправильный логин или пароль");
                 }
             }
-            catch (Exception ex)
+            else
             {
-                return Problem(ex.Message);
+                return Unauthorized("Учётная запись не существует");
             }
         }
         [AllowAnonymous]
         [HttpPost("signup")]
-        public async Task<ActionResult> SignUp([FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> SignUp([FromHeader] string client, [FromHeader] string secret)
         {
-            if (!IsDBInitialized) 
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
-            if (!client.IsImplementation) 
-                return BadRequest("Клиент не имеет доверенной реализации потока системы");
-            if (!HttpContext.Request.HasFormContentType)
-                return BadRequest("Нет утверждений для изменения");
-            var form = await HttpContext.Request.ReadFormAsync();
-            if (!form.ContainsKey("username") || !form.ContainsKey("password"))
-                return BadRequest("Нельзя создать учётную запись без идентификатора и пароля");
-            if (form["username"] == "" || form["password"] == "") 
-                return BadRequest("Нельзя создать учётную запись с пустыми идентификатором и паролем");
-
-            string guid = Guid.NewGuid().ToString();
-            var salt = CreateSalt();
-            string hash = Convert.ToBase64String(await HashPassword(form["password"].First() ?? "", guid, salt));
-
-            var claims = new List<Claim>()
+            if (!IsDBInitialized)
             {
-                new Claim(ClaimTypes.Upn, form["username"].First() ?? "", ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer)
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client != null)
+            {
+                if (_client.IsImplementation)
+                {
+                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
+                }
+            }
+            else
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+
+            IFormCollection form;
+            if (HttpContext.Request.HasFormContentType)
+            {
+                form = await HttpContext.Request.ReadFormAsync();
+            }
+            else
+            {
+                return BadRequest("Запрос не содержит регистрационной формы");
+            }
+
+            string username;
+            string password;
+            if (form.ContainsKey("username") && form.ContainsKey("password"))
+            {
+                username = form["username"].First() ?? "";
+                password = form["password"].First() ?? "";
+                if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+                {
+                    return BadRequest("Нельзя создать учётную запись с пустыми идентификатором и паролем");
+                }
+            }
+            else
+            {
+                return BadRequest("Невозможно создать учётную запись без идентификатора и пароля");
+            }
+            
+            string id = Guid.NewGuid().ToString();
+            byte[] salt = CreateSalt();
+            byte[] hash = await HashPassword(password, id, salt);
+
+            string stringScopes = "username surname name lastname email gender";
+            string integerScopes = "phone";
+
+            List<Claim> claims = new()
+            {
+                new Claim(ClaimTypes.SerialNumber, id, ClaimValueTypes.String, _issuer)
             };
             foreach(var formKey in form.Keys)
             {
                 if (string.IsNullOrEmpty(formKey)) continue;
-                Claim? claim = null;
-                switch (formKey)
+                string claimTypeValue;
+                if (stringScopes.Contains(formKey))
                 {
-                    case "surname":
-                        claim = new Claim(ClaimTypes.Surname, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
-                        break;
-                    case "name":
-                        claim = new Claim(ClaimTypes.Name, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
-                        break;
-                    case "lastname":
-                        claim = new Claim("LastName", form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
-                        break;
-                    case "email":
-                        claim = new Claim(ClaimTypes.Email, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
-                        break;
-                    case "gender":
-                        claim = new Claim(ClaimTypes.Gender, form[formKey].First() ?? "", ClaimValueTypes.String, _issuer);
-                        break;
-                    case "phone":
-                        var phone = form[formKey].First() ?? "0";
-                        claim = new Claim(ClaimTypes.MobilePhone, string.IsNullOrEmpty(phone) ? "0" : phone, ClaimValueTypes.UInteger64, _issuer);
-                        break;
+                    claimTypeValue = ClaimValueTypes.String;
+                }
+                else if (integerScopes.Contains(formKey))
+                {
+                    claimTypeValue = ClaimValueTypes.UInteger64;
+                }
+                else
+                {
+                    continue;
+                }
+                string claimType = formKey switch
+                {
+                    "username" => ClaimTypes.Upn,
+                    "surname" => ClaimTypes.Surname,
+                    "name" => ClaimTypes.Name,
+                    "email" => ClaimTypes.Email,
+                    "gender" => ClaimTypes.Gender,
+                    "phone" => ClaimTypes.MobilePhone,
+                    _ => formKey
                 };
-                if (claim != null) claims.Add(claim);
+                Claim claim = new Claim(claimType, form[formKey].First() ?? "", claimTypeValue, _issuer);
+                claims.Add(claim);
             }
             ClaimsIdentity identity = new(claims);
-            Account account = new(identity, hash, Convert.ToBase64String(salt), false, 0);
+            Account account = new(identity, Convert.ToBase64String(hash), Convert.ToBase64String(salt), false, 0);
 
             string keyId = Guid.NewGuid().ToString();
-            var payload = await _lakeService.CreateKey(keyId);
+            string payload = await _lakeService.CreateKey(keyId);
             var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-            var isKeyRegistered = await _database.CreateAuthKey(key.KeyId, _audience, guid);
 
-            var isAccountCreated = await _database.CreateAccount(account);
-            if (isAccountCreated)
+            if (await _database.CreateAccount(account))
             {
-                if (isKeyRegistered)
+                await _database.CreateAccept(id, "NAuth", "user");
+                await _database.CreateAccept(id, "NAuth", "sign");
+                if (await _database.CreateAuthKey(key.KeyId, _audience, id))
                 {
-                    string user = identity.FindFirst(ClaimTypes.Upn)?.Value ?? "";
-                    string id = CreateIdToken(account.Identity.Claims, key);
-                    string refresh = CreateRefreshToken(guid, user, key);
                     var result = new
                     {
-                        id_token = id,
-                        refresh_token = refresh
+                        id_token = CreateIdToken(account.Identity.Claims, key),
+                        refresh_token = CreateRefreshToken(id, key)
                     };
                     return Ok(result);
                 }
@@ -190,39 +234,56 @@ namespace NAuthAPI.Controllers
             }
         }
         [HttpGet("token")]
-        public async Task<ActionResult> Token([FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> CreateToken([FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
-
-            var auth = await HttpContext.AuthenticateAsync();
-            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
-            if (!scope.Contains("refresh"))
-                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
-
-            var token = auth.Ticket?.Properties.GetTokens().First().Value;
-            
-            var handler = new JwtSecurityTokenHandler();
-            var id = handler.ReadJwtToken(token).Header.Kid;
-            
-            var isValid = await _database.IsKeyValid(id);
-            if (isValid)
             {
-                var lake_res = await _lakeService.DeleteKey(id);
-                if (!lake_res) return Problem("Озеро ключей не удалило ключ");
-                var db_res = await _database.DeleteAuthKey(id);
-                if (!db_res) return Problem("Запрос к базе данных не выполнен");
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+                
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client == null)
+            {
+                return Unauthorized("Клиентское приложение не авторизовано");
+            }
+            
+            AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
+            string scope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            string userId = authResult.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+            if (!scope.Contains("refresh"))
+            {
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            }
+
+            var handler = new JwtSecurityTokenHandler();
+            string token = authResult.Ticket?.Properties.GetTokens().First().Value ?? "";
+            string id = handler.ReadJwtToken(token).Header.Kid;
+            
+            if (await _database.IsKeyValid(id))
+            {
+                if (!await _lakeService.DeleteKey(id))
+                {
+                    return Problem("Озеро ключей не удалило ключ");
+                }
+                if (!await _database.DeleteAuthKey(id)) 
+                { 
+                    return Problem("Текущий идентификатор ключа подписи не удалён из базы данных"); 
+                }
+
                 string keyId = Guid.NewGuid().ToString();
-                var payload = await _lakeService.CreateKey(keyId);
+                string payload = await _lakeService.CreateKey(keyId);
                 var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                string guid = auth.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                string user = auth.Principal?.FindFirstValue(ClaimTypes.Upn) ?? "";
-                await _database.CreateAuthKey(key.KeyId, _audience, guid);
-                string access = CreateAccessToken(guid, user, key, "user");
-                string refresh = CreateRefreshToken(guid, user, key);
+                if(!await _database.CreateAuthKey(key.KeyId, _audience, userId))
+                {
+                    return Problem("Новый ключ подписи не создан в базе данных");
+                }
+
+                List<string> acceptedScopes = await _database.GetAccepts(userId, client);
+                StringBuilder validScopes = new StringBuilder();
+                validScopes.AppendJoin(" ", _client.Scopes.Intersect(acceptedScopes));
+
+                string access = CreateAccessToken(userId, key, validScopes.ToString());
+                string refresh = CreateRefreshToken(userId, key);
                 var result = new
                 {
                     access_token = access,
@@ -235,8 +296,8 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Токен не представлен в системе или уже деактивирован");
             }
         }
-        [HttpGet("signout/this")]
-        public async Task<ActionResult> Revoke([FromHeader] string client_id, [FromHeader] string client_secret)
+        [HttpDelete("token")]
+        public async Task<ActionResult> RevokeToken([FromHeader] string client_id, [FromHeader] string client_secret)
         {
             if (!IsDBInitialized)
                 return Problem("Драйвер базы данных не инициализирован");
@@ -247,15 +308,102 @@ namespace NAuthAPI.Controllers
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             if (!scope.Contains("refresh"))
+            {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            }
             var token = auth.Properties?.GetTokens().First().Value;
             var handler = new JwtSecurityTokenHandler();
             var kid = handler.ReadJwtToken(token).Header.Kid;
+            if (!await _lakeService.DeleteKey(kid))
+            {
+                return Problem("Ключ подписи не удалён из озера ключей");
+            }
+            if (!await _database.DeleteAuthKey(kid))
+            {
+                return Problem("Идентификатор ключа подписи не удалён из базы данных");
+            }
+            return Ok();
+        }
+        [HttpPost("accept")]
+        public async Task<ActionResult> AcceptData([FromQuery] string issuer, [FromQuery] string requiredScope, [FromHeader] string client, [FromHeader] string secret)
+        {
+            if (!IsDBInitialized)
+            {
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client != null)
+            {
+                if (_client.IsImplementation)
+                {
+                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
+                }
+            }
+            else
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+            AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
+            string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!tokenScope.Contains("refresh"))
+            {
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            }
+            string user_id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+            if (string.IsNullOrEmpty(user_id))
+            {
+                return BadRequest("Токен не содержит идентификационную информацию");
+            }
             try
             {
-                var lake_res = await _lakeService.DeleteKey(kid);
-                var res = await _database.DeleteAuthKey(kid);
-                if (res && lake_res)
+                if (await _database.CreateAccept(user_id, issuer, requiredScope))
+                {
+                    return Ok();
+                }
+                else
+                {
+                    return Problem();
+                }
+            }
+            catch (Exception)
+            {
+                return Problem();
+            }
+        }
+        [HttpPost("revoke")]
+        public async Task<ActionResult> RevokeData([FromQuery] string issuer, [FromHeader] string client, [FromHeader] string secret)
+        {
+            if (!IsDBInitialized)
+            {
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client != null)
+            {
+                if (_client.IsImplementation)
+                {
+                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
+                }
+            }
+            else
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+            AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
+            string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!tokenScope.Contains("refresh"))
+            {
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            }
+            string user_id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+            if (string.IsNullOrEmpty(user_id))
+            {
+                return BadRequest("Токен не содержит идентификационную информацию");
+            }
+            try
+            {
+                var result = await _database.DeleteAccept(user_id, issuer);
+                if (result)
                 {
                     return Ok();
                 }
@@ -270,45 +418,104 @@ namespace NAuthAPI.Controllers
             }
         }
         [HttpGet("signout")]
-        public async Task<ActionResult> SignOut([FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> SignOut([FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
+            {
                 return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
+            }
+                
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client != null)
+            {
+                if (_client.IsImplementation)
+                {
+                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
+                }
+            }
+            else
+            {
                 return BadRequest("Клиентское приложение не авторизовано");
+            }
 
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             if (!scope.Contains("refresh"))
+            {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
-
-            var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
-            if (user == null) return BadRequest("Нет идентификационной информации в токене");
-            try
-            {
-                var keys = await _database.GetUserKeys(user);
-                foreach (var key in keys) await _lakeService.DeleteKey(key);
-                var res = await _database.DeleteUserAuthKeys(user);
-                if (res)
-                {
-                    return Ok();
-                }
-                else
-                {
-                    return Problem();
-                }
             }
-            catch (Exception)
+                
+            var id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
+            if (string.IsNullOrEmpty(id)) 
             {
-                return Problem();
+                return BadRequest("Нет идентификационной информации в токене");
+            } 
+
+            var keys = await _database.GetUserKeys(id);
+            foreach (var key in keys)
+                await _lakeService.DeleteKey(key);
+            if (await _database.DeleteUserAuthKeys(id))
+            {
+                return Ok();
+            }
+            else
+            {
+                return Problem("Не удалось выполнить выход");
             }
         }
+        [HttpPost("reset")]
+        public async Task<ActionResult> ResetPassword([FromForm] string password, [FromHeader] string client, [FromHeader] string secret)
+        {
+            if (!IsDBInitialized)
+            {
+                return Problem("Драйвер базы данных не инициализирован");
+            }
+
+            Client? _client = await Client.GetClientAsync(_database, client, secret);
+            if (_client != null)
+            {
+                if (_client.IsImplementation)
+                {
+                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
+                }
+            }
+            else
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+
+            var auth = await HttpContext.AuthenticateAsync();
+            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!scope.Contains("refresh"))
+            {
+                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            }
+
+            string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? string.Empty;
+            if (string.IsNullOrEmpty(id))
+            {
+                return BadRequest("Нет идентификационной информации в токене");
+            }
+
+            byte[] salt = CreateSalt();
+            byte[] hash = await HashPassword(password, id, salt);
+            if (await _database.SetPasswordHash(id, Convert.ToBase64String(hash)))
+            {
+                return Ok();
+            }
+            else
+            {
+                return Problem("Не удалось сбросить пароль");
+            }
+        }
+        
         #endregion
+
         #region Private Logic
+
         private static byte[] CreateSalt()
         {
-            return CreateRandBytes(16);
+            return CreateRandBytes(32);
         }
         private static byte[] CreateRandBytes(int bytes)
         {
@@ -317,10 +524,10 @@ namespace NAuthAPI.Controllers
             generator.GetBytes(buffer);
             return buffer;
         }
-        private async Task<byte[]> HashPassword(string password, string guid, byte[] salt)//OWASP
+        private async Task<byte[]> HashPassword(string password, string guid, byte[] salt)
         {
             byte[] _password = Encoding.UTF8.GetBytes(password);
-            var argon2 = new Argon2id(_password)
+            using (var argon2 = new Argon2id(_password)//Recommended parameters by OWASP
             {
                 DegreeOfParallelism = 1,
                 MemorySize = 19456,
@@ -328,16 +535,17 @@ namespace NAuthAPI.Controllers
                 Salt = salt,
                 AssociatedData = Encoding.UTF8.GetBytes(guid),
                 KnownSecret = Encoding.UTF8.GetBytes(_pepper)
-            };
+            })
+            {
+                var hash = await argon2.GetBytesAsync(32);
 
-            var hash = await argon2.GetBytesAsync(32);
-            
-            argon2.Dispose();
-            argon2.Reset();
-            argon2 = null;
-            GC.Collect();
+                argon2.Dispose();
+                argon2.Reset();
+                //argon2 = null;//Releases memmory (without leak)
+                GC.Collect();
 
-            return hash;
+                return hash;
+            }
         }
         private static bool IsHashValid(byte[] hash, string db_hash) => hash.SequenceEqual(Convert.FromBase64String(db_hash));
         private string CreateIdToken(IEnumerable<Claim> claims, SymmetricSecurityKey key)
@@ -346,21 +554,19 @@ namespace NAuthAPI.Controllers
             var token = CreateToken(claims, key, TimeSpan.FromHours(10));
             return token;
         }
-        private string CreateRefreshToken(string guid, string username, SymmetricSecurityKey key)
+        private string CreateRefreshToken(string guid, SymmetricSecurityKey key)
         {
             var claims = new List<Claim>() { 
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
-                new Claim("scope", "refresh", ClaimValueTypes.String, _issuer)
+                new Claim("scope", "refresh accept", ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromDays(14));
             return token;
         }
-        private string CreateAccessToken(string guid, string username, SymmetricSecurityKey key, string scope)
+        private string CreateAccessToken(string guid, SymmetricSecurityKey key, string scope)
         {
             var claims = new List<Claim>() {
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
-                new Claim(ClaimTypes.Upn, username, ClaimValueTypes.String, _issuer),
                 new Claim("scope", scope, ClaimValueTypes.String, _issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromHours(1));
@@ -379,6 +585,7 @@ namespace NAuthAPI.Controllers
             var token = new JwtSecurityTokenHandler().WriteToken(jwt);
             return token;
         }
+        
         #endregion
     }
 }

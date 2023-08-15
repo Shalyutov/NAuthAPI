@@ -17,8 +17,4 @@
     <PackageReference Include="Ydb.Sdk.Yc.Auth" Version="0.0.5" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Folder Include="keys\" />
-  </ItemGroup>
-
 </Project>

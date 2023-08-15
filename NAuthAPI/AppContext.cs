@@ -1,11 +1,13 @@
 ﻿using Org.BouncyCastle.Asn1.X509;
 using System;
+using System.Diagnostics.CodeAnalysis;
 using System.Reflection.Metadata.Ecma335;
 using System.Security.Claims;
 using System.Text;
 using System.Xml.Linq;
 using Ydb.Sdk.Table;
 using Ydb.Sdk.Value;
+using static System.Formats.Asn1.AsnWriter;
 
 namespace NAuthAPI
 {
@@ -18,13 +20,21 @@ namespace NAuthAPI
             _client = client ?? throw new ArgumentNullException(nameof(client), "Клиент доступа к БД не может быть null");
             _issuer = issuer;
         }
-        public async Task<Account?> GetAccount(string username)
+        public async Task<Account?> GetAccountByUsername(string username)
+        {
+            return await GetAccount(username, Queries.GetIdentityUsername);
+        }
+        public async Task<Account?> GetAccountById(string id)
+        {
+            return await GetAccount(id, Queries.GetIdentityId);
+        }
+        public async Task<Account?> GetAccount(string claim, string query)
         {
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$id", YdbValue.MakeUtf8(username) }
+                { "$id", YdbValue.MakeUtf8(claim) }
             };
-            var queryResponse = await ExecuteQuery(Queries.GetIdentity, parameters);
+            var queryResponse = await ExecuteQuery(query, parameters);
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count == 0) return null;
             if (sets[0].Rows.Count == 0) return null;
@@ -37,7 +47,7 @@ namespace NAuthAPI
                 new Claim(ClaimTypes.Surname, row["surname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.Name, row["name"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.SerialNumber, row["guid"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
-                new Claim("LastName", row["lastname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
+                new Claim("lastname", row["lastname"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer),
                 new Claim(ClaimTypes.MobilePhone, row["phone"].GetOptionalUint64().ToString() ?? "", ClaimValueTypes.UInteger64, _issuer),
                 new Claim(ClaimTypes.Email, row["email"].GetOptionalUtf8() ?? "", ClaimValueTypes.Email, _issuer),
                 new Claim(ClaimTypes.Gender, row["gender"].GetOptionalUtf8() ?? "", ClaimValueTypes.String, _issuer)
@@ -226,7 +236,7 @@ namespace NAuthAPI
                 row["secret"].GetOptionalUtf8(),
                 row["valid"].GetOptional()?.GetBool() ?? false,
                 row["implement"].GetOptional()?.GetBool() ?? false,
-                row["scopes"].GetOptionalUtf8());
+                (row["scopes"].GetOptionalUtf8() ?? "").Split(" ").ToList());
 
             return client;
         }
@@ -248,6 +258,16 @@ namespace NAuthAPI
             var response = await ExecuteQuery(Queries.AddAttempt, parameters);
             return response.Status.IsSuccess;
         }
+        public async Task<bool> SetPasswordHash(string id, string hash)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$id", YdbValue.MakeUtf8(id) },
+                { "$hash", YdbValue.MakeUtf8(hash) }
+            };
+            var response = await ExecuteQuery(Queries.SetPasswordHash, parameters);
+            return response.Status.IsSuccess;
+        }
         public async Task<bool> DeleteAccount(string user)
         {
             var parameters = new Dictionary<string, YdbValue>()
@@ -255,6 +275,91 @@ namespace NAuthAPI
                 { "$id", YdbValue.MakeUtf8(user) }
             };
             var response = await ExecuteQuery(Queries.DeleteAccount, parameters);
+            return response.Status.IsSuccess;
+        }
+        public async Task<bool> CreateAccept(string user_id, string client, string scope)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$client", YdbValue.MakeUtf8(client) },
+                { "$scope", YdbValue.MakeUtf8(scope) },
+                { "$datetime", YdbValue.MakeDatetime(DateTime.Now) },
+            };
+            var response = await ExecuteQuery(Queries.CreateAccept, parameters);
+            return response.Status.IsSuccess;
+        }
+        public async Task<List<string>> GetAccepts(string user_id, string client)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$client", YdbValue.MakeUtf8(client) }
+            };
+            var response = await ExecuteQuery(Queries.SelectAccept, parameters);
+            var sets = response.Result.ResultSets;
+            List<string> result = new List<string>();
+            if (sets.Count > 0)
+            {
+                foreach (var row in sets[0].Rows)
+                {
+                    result.Add(row["scope"].GetOptionalUtf8() ?? "");
+                }
+            }
+            return result;
+        }
+        public async Task<bool> DeleteAccept(string user_id, string client)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$client", YdbValue.MakeUtf8(client) }
+            };
+            var response = await ExecuteQuery(Queries.DeleteAccept, parameters);
+            return response.Status.IsSuccess;
+        }
+        public async Task<List<Claim>> GetClaims(List<string> claims, string id)
+        {
+            List<YdbValue> list = new List<YdbValue>();
+            foreach (string claim in claims) list.Add(YdbValue.MakeUtf8(claim));
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$id", YdbValue.MakeUtf8(id) },
+                { "$list", YdbValue.MakeList(list) }
+            };
+            var queryResponse = await ExecuteQuery(Queries.GetClaims, parameters);
+            var sets = queryResponse.Result.ResultSets;
+            if (sets.Count > 0)
+            {
+                List<Claim> keys = new();
+                foreach (var row in sets[0].Rows)
+                {
+                    string type = row["type"].GetOptionalUtf8() ?? "";
+                    string value = row["value"].GetOptionalUtf8() ?? "";
+                    string issuer = row["issuer"].GetOptionalUtf8() ?? "";
+                    if (!string.IsNullOrEmpty(type))
+                    {
+                        keys.Add(new Claim(type, value, ClaimValueTypes.String, issuer));
+                    }
+                }
+                return keys;
+            }
+            else
+            {
+                throw new ApplicationException("Пустой ответ от базы данных");
+            }
+            
+        }
+        public async Task<bool> SetClaim(string id, string issuer, string type, string value)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$id", YdbValue.MakeUtf8(id) },
+                { "$issuer", YdbValue.MakeUtf8(issuer) },
+                { "$type", YdbValue.MakeUtf8(type) },
+                { "$value", YdbValue.MakeUtf8(value) },
+            };
+            var response = await ExecuteQuery(Queries.SetClaim, parameters);
             return response.Status.IsSuccess;
         }
         public async Task<ExecuteDataQueryResponse> ExecuteQuery(string query, Dictionary<string, YdbValue> parameters)
