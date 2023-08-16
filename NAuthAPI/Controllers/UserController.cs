@@ -19,7 +19,9 @@ namespace NAuthAPI.Controllers
             _database = db;
             _lakeService = lakeService;
         }
+
         #region Endpoints Logic
+
         [HttpGet("account")]
         public async Task<ActionResult> GetAccount([FromHeader] string client, [FromHeader] string secret)
         {
@@ -67,9 +69,8 @@ namespace NAuthAPI.Controllers
                 return NoContent();
             }
         }
-
         [HttpGet("claims")]
-        public async Task<ActionResult> GetClaims([FromForm] string claims, [FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> GetClaims([FromForm] string scopes, [FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
             {
@@ -83,13 +84,13 @@ namespace NAuthAPI.Controllers
             }
 
             string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-            List<string> validScopes = (HttpContext.User.FindFirst("scope")?.Value ?? "").Split(" ").ToList();
-            List<string> requiredScopes = claims.Split(" ").ToList();
-            
-            List<Claim> 
-            if (_claims.Count > 0)
+            var validScopes = (HttpContext.User.FindFirst("scope")?.Value ?? "").Split(" ");
+            var requiredScopes = scopes.Split(" ");
+
+            var data = await _database.GetClaims(validScopes.Intersect(requiredScopes), id);
+            if (data.Count > 0)
             {
-                return Ok(_claims);
+                return Ok(data);
             }
             else
             {
@@ -165,6 +166,10 @@ namespace NAuthAPI.Controllers
             foreach (var key in keys)
                 await _lakeService.DeleteKey(key);
             await _database.DeleteUserAuthKeys(id);
+            foreach (string item in "user sign reset delete".Split(" "))
+            {
+                await _database.DeleteAccept(id, "NAuth", item);
+            }
 
             if (await _database.DeleteAccount(id))
             {
@@ -220,7 +225,9 @@ namespace NAuthAPI.Controllers
                 return Problem();
             }
         }
+
         #endregion
+
         #region Private Logic
         #endregion
     }

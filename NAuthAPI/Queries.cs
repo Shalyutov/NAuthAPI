@@ -100,7 +100,6 @@
             keys
         WHERE 
             kid = $id;";
-        //TODO
         public static string DeleteClaim = @"
         DECLARE $id AS Utf8;
         DECLARE $type AS Utf8;
@@ -108,7 +107,8 @@
         FROM
             claims
         WHERE 
-            audience = $id;";
+            audience = $id
+            AND type = $type;";
         public static string DeleteUserKeys = @"
         DECLARE $user AS Utf8;
         DELETE
@@ -176,6 +176,17 @@
             ($client, $user_id, $scope, $datetime);
         ";
         public static string DeleteAccept = @"
+        DECLARE $user_id As Utf8;
+        DECLARE $client As Utf8;
+        DECLARE $type As Utf8;
+        DELETE FROM
+            accept
+        WHERE
+            user = $user_id 
+            AND client = $client
+            AND type = #type;
+        ";
+        public static string DeleteAllAccept = @"
         DECLARE $user_id As Utf8;
         DECLARE $client As Utf8;
         DELETE FROM

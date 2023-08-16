@@ -215,8 +215,11 @@ namespace NAuthAPI.Controllers
 
             if (await _database.CreateAccount(account))
             {
-                await _database.CreateAccept(id, "NAuth", "user");
-                await _database.CreateAccept(id, "NAuth", "sign");
+                foreach(string item in "user sign reset delete".Split(" "))
+                {
+                    await _database.CreateAccept(id, "NAuth", item);
+                }
+                
                 if (await _database.CreateAuthKey(key.KeyId, _audience, id))
                 {
                     var result = new
@@ -234,7 +237,7 @@ namespace NAuthAPI.Controllers
             }
         }
         [HttpGet("token")]
-        public async Task<ActionResult> CreateToken([FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> CreateToken([FromQuery] string? scope, [FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
             {
@@ -248,9 +251,9 @@ namespace NAuthAPI.Controllers
             }
             
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
-            string scope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            string currentScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             string userId = authResult.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-            if (!scope.Contains("refresh"))
+            if (!currentScope.Contains("refresh"))
             {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
@@ -280,7 +283,14 @@ namespace NAuthAPI.Controllers
 
                 List<string> acceptedScopes = await _database.GetAccepts(userId, client);
                 StringBuilder validScopes = new StringBuilder();
-                validScopes.AppendJoin(" ", _client.Scopes.Intersect(acceptedScopes));
+                if (!string.IsNullOrEmpty(scope))
+                {
+                    validScopes.AppendJoin(" ", _client.Scopes.Intersect(acceptedScopes).Intersect(scope.Split(" ")));
+                }
+                else
+                {
+                    validScopes.AppendJoin(" ", _client.Scopes.Intersect(acceptedScopes));
+                }
 
                 string access = CreateAccessToken(userId, key, validScopes.ToString());
                 string refresh = CreateRefreshToken(userId, key);
@@ -295,6 +305,16 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Токен не представлен в системе или уже деактивирован");
             }
+        }
+        [HttpGet("token/reset")]
+        public async Task<ActionResult> GetResetToken([FromHeader] string client, [FromHeader] string secret)
+        {
+            return await CreateToken("reset", client, secret);
+        }
+        [HttpGet("token/accept")]
+        public async Task<ActionResult> GetAcceptToken([FromHeader] string client, [FromHeader] string secret)
+        {
+            return await CreateToken("accept", client, secret);
         }
         [HttpDelete("token")]
         public async Task<ActionResult> RevokeToken([FromHeader] string client_id, [FromHeader] string client_secret)
@@ -325,7 +345,7 @@ namespace NAuthAPI.Controllers
             return Ok();
         }
         [HttpPost("accept")]
-        public async Task<ActionResult> AcceptData([FromQuery] string issuer, [FromQuery] string requiredScope, [FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> AcceptData([FromQuery] string issuer, [FromQuery] string scope, [FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
             {
@@ -345,7 +365,7 @@ namespace NAuthAPI.Controllers
             }
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
             string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
-            if (!tokenScope.Contains("refresh"))
+            if (!tokenScope.Contains("accept"))
             {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
@@ -356,7 +376,7 @@ namespace NAuthAPI.Controllers
             }
             try
             {
-                if (await _database.CreateAccept(user_id, issuer, requiredScope))
+                if (await _database.CreateAccept(user_id, issuer, scope))
                 {
                     return Ok();
                 }
@@ -371,7 +391,7 @@ namespace NAuthAPI.Controllers
             }
         }
         [HttpPost("revoke")]
-        public async Task<ActionResult> RevokeData([FromQuery] string issuer, [FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> RevokeData([FromQuery] string issuer, [FromQuery] string? scope, [FromHeader] string client, [FromHeader] string secret)
         {
             if (!IsDBInitialized)
             {
@@ -402,15 +422,22 @@ namespace NAuthAPI.Controllers
             }
             try
             {
-                var result = await _database.DeleteAccept(user_id, issuer);
-                if (result)
+                if (string.IsNullOrEmpty(scope))
                 {
-                    return Ok();
+                    if (await _database.DeleteAccept(user_id, issuer))
+                    {
+                        return Ok();
+                    }
                 }
                 else
                 {
-                    return Problem();
+                    if (await _database.DeleteAccept(user_id, issuer, scope))
+                    {
+                        return Ok();
+                    }
                 }
+                return Problem();
+                
             }
             catch (Exception)
             {
@@ -486,7 +513,7 @@ namespace NAuthAPI.Controllers
 
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
-            if (!scope.Contains("refresh"))
+            if (!scope.Contains("reset"))
             {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }

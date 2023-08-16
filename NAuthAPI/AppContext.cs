@@ -20,6 +20,7 @@ namespace NAuthAPI
             _client = client ?? throw new ArgumentNullException(nameof(client), "Клиент доступа к БД не может быть null");
             _issuer = issuer;
         }
+        #region Account Data
         public async Task<Account?> GetAccountByUsername(string username)
         {
             return await GetAccount(username, Queries.GetIdentityUsername);
@@ -82,6 +83,8 @@ namespace NAuthAPI
                 throw new ApplicationException("Пустой ответ от базы данных");
             }
         }
+        #endregion
+        #region Account Management
         public async Task<bool> CreateAccount(Account account)
         {
             var parameters = new Dictionary<string, YdbValue>
@@ -102,6 +105,59 @@ namespace NAuthAPI
             var queryResponse = await ExecuteQuery(Queries.CreateAccount, parameters);
             return queryResponse.Status.IsSuccess;
         }
+        public async Task<bool> UpdateAccount(string username, Dictionary<string, string> claims)
+        {
+            if (claims.Count == 0) return true;
+            StringBuilder queryBuilder = new();
+            StringBuilder bindings = new();
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$id", YdbValue.MakeUtf8(username) }
+            };
+            queryBuilder.AppendLine($"DECLARE $id AS Utf8;");
+            var stringScopes = "surname name lastname email gender".Split(" ");
+            var uint64Scopes = "phone".Split(" ");
+            foreach (var record in claims)
+            {
+                if (stringScopes.Contains(record.Key))
+                {
+                    parameters.Add($"${record.Key}", YdbValue.MakeUtf8(record.Value));
+                    queryBuilder.AppendLine($"DECLARE ${record.Key} AS Utf8;");
+                }
+                else if (uint64Scopes.Contains(record.Key))
+                {
+                    parameters.Add($"${record.Key}", YdbValue.MakeUint64(ulong.Parse(record.Value)));
+                    queryBuilder.AppendLine($"DECLARE ${record.Key} AS Uint64;");
+                }
+                else
+                {
+                    continue;
+                }
+                bindings.Append($"{record.Key} = ${record.Key}, ");
+            }
+            if (bindings.Length > 1)
+            {
+                bindings.Remove(bindings.Length - 2, 2);//remove redundant comma
+            }
+            else
+            {
+                return true;
+            }
+            queryBuilder.AppendLine($"UPDATE users SET {bindings.ToString()} WHERE guid = $id");
+            var response = await ExecuteQuery(queryBuilder.ToString(), parameters);
+            return response.Status.IsSuccess;
+        }
+        public async Task<bool> DeleteAccount(string user)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$id", YdbValue.MakeUtf8(user) }
+            };
+            var response = await ExecuteQuery(Queries.DeleteAccount, parameters);
+            return response.Status.IsSuccess;
+        }
+        #endregion
+        #region Key Management
         public async Task<bool> CreateAuthKey(string keyId, string audience, string username)
         {
             var parameters = new Dictionary<string, YdbValue>
@@ -177,48 +233,8 @@ namespace NAuthAPI
                 throw new ApplicationException("Пустой ответ от базы данных");
             }
         }
-        public async Task<bool> UpdateAccount(string username, Dictionary<string, string> claims)
-        {
-            if (claims.Count == 0) return true;
-            StringBuilder queryBuilder = new();
-            StringBuilder bindings = new();
-            var parameters = new Dictionary<string, YdbValue>
-            {
-                { "$id", YdbValue.MakeUtf8(username) }
-            };
-            queryBuilder.AppendLine($"DECLARE $id AS Utf8;");
-            var stringScopes = "surname name lastname email gender".Split(" ");
-            var uint64Scopes = "phone".Split(" ");
-            foreach (var record in claims)
-            {
-                if (stringScopes.Contains(record.Key))
-                {
-                    parameters.Add($"${record.Key}", YdbValue.MakeUtf8(record.Value));
-                    queryBuilder.AppendLine($"DECLARE ${record.Key} AS Utf8;");
-                }
-                else if (uint64Scopes.Contains(record.Key))
-                {
-                    parameters.Add($"${record.Key}", YdbValue.MakeUint64(ulong.Parse(record.Value)));
-                    queryBuilder.AppendLine($"DECLARE ${record.Key} AS Uint64;");
-                }
-                else
-                {
-                    continue;
-                }
-                bindings.Append($"{record.Key} = ${record.Key}, ");
-            }
-            if (bindings.Length > 1)
-            {
-                bindings.Remove(bindings.Length - 2, 2);//remove redundant comma
-            }
-            else
-            {
-                return true;
-            }
-            queryBuilder.AppendLine($"UPDATE users SET {bindings.ToString()} WHERE guid = $id");
-            var response = await ExecuteQuery(queryBuilder.ToString(), parameters);
-            return response.Status.IsSuccess;
-        }
+        #endregion
+        #region Client Management
         public async Task<Client?> GetClient(string name)
         {
             var parameters = new Dictionary<string, YdbValue>() 
@@ -240,6 +256,8 @@ namespace NAuthAPI
 
             return client;
         }
+        #endregion
+        #region User Security
         public async Task<bool> NullAttempt(string user)
         {
             var parameters = new Dictionary<string, YdbValue>()
@@ -268,15 +286,8 @@ namespace NAuthAPI
             var response = await ExecuteQuery(Queries.SetPasswordHash, parameters);
             return response.Status.IsSuccess;
         }
-        public async Task<bool> DeleteAccount(string user)
-        {
-            var parameters = new Dictionary<string, YdbValue>()
-            {
-                { "$id", YdbValue.MakeUtf8(user) }
-            };
-            var response = await ExecuteQuery(Queries.DeleteAccount, parameters);
-            return response.Status.IsSuccess;
-        }
+        #endregion
+        #region Data Accept 
         public async Task<bool> CreateAccept(string user_id, string client, string scope)
         {
             var parameters = new Dictionary<string, YdbValue>()
@@ -308,6 +319,17 @@ namespace NAuthAPI
             }
             return result;
         }
+        public async Task<bool> DeleteAccept(string user_id, string client, string type)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$client", YdbValue.MakeUtf8(client) },
+                { "$type", YdbValue.MakeUtf8(type) }
+            };
+            var response = await ExecuteQuery(Queries.DeleteAccept, parameters);
+            return response.Status.IsSuccess;
+        }
         public async Task<bool> DeleteAccept(string user_id, string client)
         {
             var parameters = new Dictionary<string, YdbValue>()
@@ -315,10 +337,12 @@ namespace NAuthAPI
                 { "$user_id", YdbValue.MakeUtf8(user_id) },
                 { "$client", YdbValue.MakeUtf8(client) }
             };
-            var response = await ExecuteQuery(Queries.DeleteAccept, parameters);
+            var response = await ExecuteQuery(Queries.DeleteAllAccept, parameters);
             return response.Status.IsSuccess;
         }
-        public async Task<List<Claim>> GetClaims(List<string> claims, string id)
+        #endregion
+        #region Data Management
+        public async Task<List<Claim>> GetClaims(IEnumerable<string> claims, string id)
         {
             List<YdbValue> list = new List<YdbValue>();
             foreach (string claim in claims) list.Add(YdbValue.MakeUtf8(claim));
@@ -362,6 +386,7 @@ namespace NAuthAPI
             var response = await ExecuteQuery(Queries.SetClaim, parameters);
             return response.Status.IsSuccess;
         }
+        #endregion
         public async Task<ExecuteDataQueryResponse> ExecuteQuery(string query, Dictionary<string, YdbValue> parameters)
         {
             var response = await _client.SessionExec(async session => 
