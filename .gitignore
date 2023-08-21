@@ -364,3 +364,8 @@ FodyWeavers.xsd
 
 yandexSA.json
 /NAuthAPI/keys/*.key
+/NAuthAPI/key.json
+/NAuthAPI/lake.key
+/TestProject/key.json
+/TestProject/key.json
+/TestProject/authorized_key (2).json
