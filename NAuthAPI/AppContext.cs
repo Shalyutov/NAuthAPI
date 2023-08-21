@@ -5,9 +5,11 @@ using System.Reflection.Metadata.Ecma335;
 using System.Security.Claims;
 using System.Text;
 using System.Xml.Linq;
+using Ydb.Sdk;
 using Ydb.Sdk.Table;
 using Ydb.Sdk.Value;
 using static System.Formats.Asn1.AsnWriter;
+using static Yandex.Cloud.Mdb.Clickhouse.V1.Config.ClickhouseConfig.Types.ExternalDictionary.Types.Structure.Types;
 
 namespace NAuthAPI
 {
@@ -251,7 +253,7 @@ namespace NAuthAPI
                 row["name"].GetOptionalUtf8(),
                 row["secret"].GetOptionalUtf8(),
                 row["valid"].GetOptional()?.GetBool() ?? false,
-                row["implement"].GetOptional()?.GetBool() ?? false,
+                row["trust"].GetOptional()?.GetBool() ?? false,
                 (row["scopes"].GetOptionalUtf8() ?? "").Split(" ").ToList());
 
             return client;
@@ -309,7 +311,7 @@ namespace NAuthAPI
             };
             var response = await ExecuteQuery(Queries.SelectAccept, parameters);
             var sets = response.Result.ResultSets;
-            List<string> result = new List<string>();
+            List<string> result = new();
             if (sets.Count > 0)
             {
                 foreach (var row in sets[0].Rows)
@@ -344,7 +346,7 @@ namespace NAuthAPI
         #region Data Management
         public async Task<List<Claim>> GetClaims(IEnumerable<string> claims, string id)
         {
-            List<YdbValue> list = new List<YdbValue>();
+            List<YdbValue> list = new();
             foreach (string claim in claims) list.Add(YdbValue.MakeUtf8(claim));
             var parameters = new Dictionary<string, YdbValue>
             {
@@ -384,6 +386,101 @@ namespace NAuthAPI
                 { "$value", YdbValue.MakeUtf8(value) },
             };
             var response = await ExecuteQuery(Queries.SetClaim, parameters);
+            return response.Status.IsSuccess;
+        }
+        //todo delete claim
+        #endregion
+        #region Authorization Management
+        public async Task<bool> CreateRequest(Request request)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$user", YdbValue.MakeUtf8(request.User) },
+                { "$client", YdbValue.MakeUtf8(request.Client) },
+                { "$verifier", YdbValue.MakeUtf8(request.Verifier) },
+                { "$scope", YdbValue.MakeUtf8(request.Scope) },
+                { "$code", YdbValue.MakeUtf8(request.Code) },
+                { "$stamp", YdbValue.MakeDatetime(DateTime.Now) }
+            };
+            var response = await ExecuteQuery(Queries.CreateRequest, parameters);
+            return response.Status.IsSuccess;
+        }
+        public async Task<Request?> GetRequest(string client, string code_verifier)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$client", YdbValue.MakeUtf8(client) },
+                { "$verifier", YdbValue.MakeUtf8(code_verifier) }
+            };
+            var response = await ExecuteQuery(Queries.GetRequest, parameters);
+            var sets = response.Result.ResultSets;
+            if (sets.Count > 0)
+            {
+                if (sets[0].Rows.Count > 0)
+                {
+                    var row = sets[0].Rows[0];
+                    Request request = new()
+                    {
+                        Client = row["client"].GetOptionalUtf8() ?? "",
+                        Scope = row["scope"].GetOptionalUtf8() ?? "",
+                        Code = row["code"].GetOptionalUtf8() ?? "",
+                        Verifier = row["verifier"].GetOptionalUtf8() ?? "",
+                        User = row["user"].GetOptionalUtf8() ?? "",
+                        Stamp = row["stamp"].GetOptionalDatetime() ?? DateTime.MinValue,
+                    };
+                    return request;
+                }
+                else
+                {
+                    return null;
+                }
+            }
+            else
+            {
+                return null;
+            }
+        }
+        public async Task<Request?> GetRequestByCode(string code)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$code", YdbValue.MakeUtf8(code) }
+            };
+            var response = await ExecuteQuery(Queries.GetRequestByCode, parameters);
+            var sets = response.Result.ResultSets;
+            if (sets.Count > 0)
+            {
+                if (sets[0].Rows.Count > 0)
+                {
+                    var row = sets[0].Rows[0];
+                    Request request = new()
+                    {
+                        Client = row["client"].GetOptionalUtf8() ?? "",
+                        Scope = row["scope"].GetOptionalUtf8() ?? "",
+                        Code = row["code"].GetOptionalUtf8() ?? "",
+                        Verifier = row["verifier"].GetOptionalUtf8() ?? "",
+                        User = row["user"].GetOptionalUtf8() ?? "",
+                        Stamp = row["stamp"].GetOptionalDatetime() ?? DateTime.MinValue,
+                    };
+                    return request;
+                }
+                else
+                {
+                    return null;
+                }
+            }
+            else
+            {
+                return null;
+            }
+        }
+        public async Task<bool> DeleteRequest(string code)
+        {
+            var parameters = new Dictionary<string, YdbValue>()
+            {
+                { "$code", YdbValue.MakeUtf8(code) }
+            };
+            var response = await ExecuteQuery(Queries.DeleteRequest, parameters);
             return response.Status.IsSuccess;
         }
         #endregion

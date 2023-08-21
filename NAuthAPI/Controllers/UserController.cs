@@ -12,30 +12,20 @@ namespace NAuthAPI.Controllers
     public class UserController : ControllerBase
     {
         readonly AppContext _database;
-        readonly KeyLakeService _lakeService;
-        private bool IsDBInitialized => _database != null;
-        public UserController(AppContext db, KeyLakeService lakeService)
+        readonly IKVEngine _kvService;
+
+        public UserController(AppContext db, IKVEngine kvService)
         {
             _database = db;
-            _lakeService = lakeService;
+            _kvService = kvService;
         }
 
         #region Endpoints Logic
 
+        [Client]
         [HttpGet("account")]
-        public async Task<ActionResult> GetAccount([FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> GetAccount()
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-                
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client == null)
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
-
             string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             string scope = HttpContext.User.FindFirst("scope")?.Value ?? "";
             Account? account = await _database.GetAccountById(id);
@@ -69,20 +59,10 @@ namespace NAuthAPI.Controllers
                 return NoContent();
             }
         }
+        [Client]
         [HttpGet("claims")]
-        public async Task<ActionResult> GetClaims([FromForm] string scopes, [FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> GetClaims([FromForm] string scopes)
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client == null)
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
-
             string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             var validScopes = (HttpContext.User.FindFirst("scope")?.Value ?? "").Split(" ");
             var requiredScopes = scopes.Split(" ");
@@ -97,20 +77,22 @@ namespace NAuthAPI.Controllers
                 return NoContent();
             }
         }
+        [Client]
         [HttpPut("account")]
-        public async Task<ActionResult> UpdateAccount([FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> UpdateAccount()
         {
-            if (!IsDBInitialized)
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
             if (!HttpContext.Request.HasFormContentType)
+            {
                 return BadRequest("Запрос не представляет форму для измененния данных");
+            }
+                
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? string.Empty;
-            if (!scope.Contains("user")) 
+            if (!scope.Contains("user"))
+            {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
+            }
+                
             var form = await HttpContext.Request.ReadFormAsync();
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
             if (user != null)
@@ -125,35 +107,18 @@ namespace NAuthAPI.Controllers
                 }
                 else
                 {
-                    return BadRequest();
+                    return BadRequest("Не удалось изменить атрибуты пользователя. Запрос к БД не выполнен");
                 }
             }
             else
             {
-                return BadRequest("Авторизованный ключ не содержит имени пользователя");
+                return BadRequest("Авторизованный ключ не содержит идентификатора учётной записи пользователя");
             }
         }
+        [TrustClient]
         [HttpDelete("account")]
-        public async Task<ActionResult> DeleteUser([FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> DeleteUser()
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-                
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client != null)
-            {
-                if (_client.IsImplementation)
-                {
-                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
-                }
-            }
-            else
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
-
             var scope = HttpContext.User.FindFirstValue("scope") ?? string.Empty;
             if (!scope.Contains("user"))
             {
@@ -164,7 +129,7 @@ namespace NAuthAPI.Controllers
             
             var keys = await _database.GetUserKeys(id);
             foreach (var key in keys)
-                await _lakeService.DeleteKey(key);
+                _kvService.DeleteKey(key);
             await _database.DeleteUserAuthKeys(id);
             foreach (string item in "user sign reset delete".Split(" "))
             {
@@ -180,50 +145,28 @@ namespace NAuthAPI.Controllers
                 return Problem("Не удалось удалить учётную запись");
             }
         }
+        [Client]
         [AllowAnonymous]
         [HttpGet("account/exists")]
-        public async Task<ActionResult> IsUserExists([FromQuery] string username, [FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> IsUserExists([FromQuery] string username)
         {
-            if (!IsDBInitialized)
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
-            try
+            bool? exist = await _database.IsUsernameExists(username);
+            if (exist == null)
             {
-                bool? exist = await _database.IsUsernameExists(username);
-                if (exist == null)
-                {
-                    return NoContent();
-                }
-                else
-                {
-                    return Ok(exist);
-                }
+                return NoContent();
             }
-            catch (Exception ex)
+            else
             {
-                return Problem(ex.Message);
+                return Ok(exist);
             }
         }
+        [TrustClient]
         [HttpGet("account/tokens")]
-        public async Task<ActionResult> UserTokens([FromHeader] string client_id, [FromHeader] string client_secret)
+        public async Task<ActionResult> UserTokens()
         {
-            if (!IsDBInitialized)
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
-            try
-            {
-                string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                var keys = await _database.GetUserKeys(user);
-                return Ok(keys);
-            }
-            catch (Exception)
-            {
-                return Problem();
-            }
+            string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+            var keys = await _database.GetUserKeys(user);
+            return Ok(keys);
         }
 
         #endregion

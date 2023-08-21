@@ -13,14 +13,21 @@ using Ydb.Sdk.Table;
 using Ydb.Sdk.Yc;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddEnvironmentVariables();
 
-string keypath = builder.Configuration["KeyPath"] ?? "";
+string keypath = builder.Configuration["DatabaseAuth"] ?? "";
 string endpoint = builder.Configuration["Endpoint"] ?? "";
-string database = builder.Configuration["Database"] ?? "";
-string issuer = builder.Configuration["Issuer"] ?? "";
-string audience = builder.Configuration["Audience"] ?? "";
-string lake = builder.Configuration["KeyLake"] ?? "";
-string auth = builder.Configuration["Auth"] ?? "";
+string databasePath = builder.Configuration["Database"] ?? "";
+
+AuthNames names = new()
+{
+    Issuer = builder.Configuration["Issuer"] ?? "NAuth API",
+    Audience = builder.Configuration["Audience"] ?? "NAuth App"
+};
+
+string lake_auth = builder.Configuration["KeyLakeAuth"] ?? "";
+string vault_auth = builder.Configuration["VaultAuth"] ?? "";
+string kv_address = builder.Configuration["KVAddress"] ?? "";
 
 ICredentialsProvider provider;
 Driver? driver = null;
@@ -41,7 +48,7 @@ for(int i = 0; i < 6; i++)//retry connect //переподключение
 {
     try
     {
-        var config = new DriverConfig(endpoint, database, provider);
+        var config = new DriverConfig(endpoint, databasePath, provider);
         driver = new Driver(config);
         await driver.Initialize();
         break;
@@ -55,14 +62,27 @@ for(int i = 0; i < 6; i++)//retry connect //переподключение
 if (driver != null)
 {
     tableClient = new TableClient(driver, new TableClientConfig());
-    _database = new NAuthAPI.AppContext(tableClient, issuer);
+    _database = new NAuthAPI.AppContext(tableClient, names.Issuer);
 }
 else
 {
     throw new Exception("Драйвер базы данных не запущен");
 }
 
-var LakeService = new KeyLakeService(new HttpClient(), lake, issuer, "KeyLake", auth);
+IKVEngine kvService;
+if (!string.IsNullOrEmpty(lake_auth))
+{
+    var iam = File.ReadAllBytes(lake_auth);
+    kvService = new KeyLakeService(new HttpClient(), kv_address, names.Issuer, "KeyLake", iam);
+}
+else if (!string.IsNullOrEmpty(vault_auth))
+{
+    kvService = new VaultService(kv_address, vault_auth);
+}
+else
+{
+    kvService = new InternalService();
+}
 
 builder.Services.AddControllers();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -72,9 +92,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             options.TokenValidationParameters = new TokenValidationParameters()
             {
                 ValidateIssuer = true,
-                ValidIssuer = issuer,
+                ValidIssuer = names.Issuer,
                 ValidateAudience = true,
-                ValidAudience = audience,
+                AudienceValidator = (aud, das, vvb) => {
+                    int count = 0;
+                    int valid = 0;
+                    foreach(var a in aud)
+                    {
+                        count++;
+                        Client? client = _database.GetClient(a).Result;
+                        if (client != null)
+                        {
+                            if (client.IsValid) valid++;
+                        }
+                    }
+                    return valid == count;
+                },
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKeyValidator = (key, token, param) => {
@@ -84,7 +117,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     var list = new List<SecurityKey>();
                     try
                     {
-                        var payload = LakeService.GetKey(kid).Result;
+                        var payload = kvService.GetKey(kid);
                         var key = new SymmetricSecurityKey(Convert.FromBase64String(payload))
                         {
                             KeyId = kid
@@ -99,8 +132,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 builder.Services.AddAuthorization();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton(_database);
-builder.Services.AddSingleton(LakeService);
-builder.Configuration.AddEnvironmentVariables();
+builder.Services.AddSingleton(kvService);
+builder.Services.AddSingleton(names);
 
 var app = builder.Build();
 
@@ -108,6 +141,8 @@ app.UseHttpsRedirection();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+app.UseClientMiddleware();
 
 app.MapControllers();
 

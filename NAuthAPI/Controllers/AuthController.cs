@@ -25,6 +25,9 @@ using Grpc.Core;
 using System.Security.Principal;
 using System.Collections;
 using System.Text.Json.Nodes;
+using static Ydb.Monitoring.SelfCheck.Types;
+using Org.BouncyCastle.Asn1.Ocsp;
+using static System.Formats.Asn1.AsnWriter;
 
 namespace NAuthAPI.Controllers
 {
@@ -34,44 +37,27 @@ namespace NAuthAPI.Controllers
     public class AuthController : ControllerBase
     {
         readonly AppContext _database;
-        readonly KeyLakeService _lakeService;
+        readonly IKVEngine _kvService;
         readonly string _pepper;
         readonly string _issuer;
         readonly string _audience;
-        private bool IsDBInitialized => _database != null;
-        public AuthController(IConfiguration webconfig, AppContext db, KeyLakeService lakeService)
+        
+        public AuthController(AuthNames names, AppContext db, IKVEngine kvService)
         {
             _database = db;
-            _lakeService = lakeService;
-            _pepper = webconfig["Pepper"] ?? "";
-            _issuer = webconfig["Issuer"] ?? "";
-            _audience = webconfig["Audience"] ?? "";
+            _kvService = kvService;
+            _pepper = kvService.GetPepper();
+            _issuer = names.Issuer;
+            _audience = names.Audience;
         }
 
         #region Endpoints Logic
 
+        [TrustClient]
         [AllowAnonymous]
         [HttpPost("signin")]
-        public async Task<ActionResult> SignIn([FromForm] string username, [FromForm] string password, [FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> SignIn([FromForm] string username, [FromForm] string password)
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-                
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client != null)
-            {
-                if (_client.IsImplementation)
-                {
-                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
-                }
-            }
-            else
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
-
             if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
             {
                 return BadRequest("Невозможно выполнить вход с пустыми идентификатором и паролем");
@@ -90,18 +76,23 @@ namespace NAuthAPI.Controllers
                 }
                 string id = account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
                 byte[] hash = await HashPassword(password, id, Convert.FromBase64String(account.Salt));
+                if (string.IsNullOrEmpty(account.Hash))
+                {
+                    return Forbid();
+                }
                 if (IsHashValid(hash, account.Hash))
                 {
                     await _database.NullAttempt(id);
                     string keyId = Guid.NewGuid().ToString();
-                    var payload = await _lakeService.CreateKey(keyId);
+                    var payload = _kvService.CreateKey(keyId);
                     var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
+                    string client = ((Client?)HttpContext.Items["client"])!.Name ?? "";
                     if (await _database.CreateAuthKey(keyId, _audience, id))
                     {
                         var result = new
                         {
-                            id_token = CreateIdToken(account.Identity.Claims, key),
-                            refresh_token = CreateRefreshToken(id, key)
+                            id_token = CreateIdToken(account.Identity.Claims, key, client),
+                            refresh_token = CreateRefreshToken(id, key, client)
                         };
                         return Ok(result);
                     }
@@ -118,28 +109,11 @@ namespace NAuthAPI.Controllers
                 return Unauthorized("Учётная запись не существует");
             }
         }
+        [TrustClient]
         [AllowAnonymous]
         [HttpPost("signup")]
-        public async Task<ActionResult> SignUp([FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> SignUp()
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client != null)
-            {
-                if (_client.IsImplementation)
-                {
-                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
-                }
-            }
-            else
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
-
             IFormCollection form;
             if (HttpContext.Request.HasFormContentType)
             {
@@ -203,19 +177,20 @@ namespace NAuthAPI.Controllers
                     "phone" => ClaimTypes.MobilePhone,
                     _ => formKey
                 };
-                Claim claim = new Claim(claimType, form[formKey].First() ?? "", claimTypeValue, _issuer);
+                Claim claim = new(claimType, form[formKey].First() ?? "", claimTypeValue, _issuer);
                 claims.Add(claim);
             }
             ClaimsIdentity identity = new(claims);
             Account account = new(identity, Convert.ToBase64String(hash), Convert.ToBase64String(salt), false, 0);
 
             string keyId = Guid.NewGuid().ToString();
-            string payload = await _lakeService.CreateKey(keyId);
+            string payload = _kvService.CreateKey(keyId);
             var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
+            string client = ((Client?)HttpContext.Items["client"])!.Name ?? "";
 
             if (await _database.CreateAccount(account))
             {
-                foreach(string item in "user sign reset delete".Split(" "))
+                foreach(string item in "user reset delete".Split(" "))
                 {
                     await _database.CreateAccept(id, "NAuth", item);
                 }
@@ -224,8 +199,8 @@ namespace NAuthAPI.Controllers
                 {
                     var result = new
                     {
-                        id_token = CreateIdToken(account.Identity.Claims, key),
-                        refresh_token = CreateRefreshToken(id, key)
+                        id_token = CreateIdToken(account.Identity.Claims, key, client),
+                        refresh_token = CreateRefreshToken(id, key, client)
                     };
                     return Ok(result);
                 }
@@ -236,64 +211,106 @@ namespace NAuthAPI.Controllers
                 return Problem("Не удалось зарегистрировать пользователя");
             }
         }
-        [HttpGet("token")]
-        public async Task<ActionResult> CreateToken([FromQuery] string? scope, [FromHeader] string client, [FromHeader] string secret)
+        [Client]
+        [AllowAnonymous]
+        [HttpPost("token")]
+        public async Task<ActionResult> CreateToken([FromForm] string? scope, [FromForm] string code, [FromForm] string verifier)
         {
-            if (!IsDBInitialized)
+            Client? client = (Client?)HttpContext.Items["client"];
+            if (client == null)
             {
-                return Problem("Драйвер базы данных не инициализирован");
+                return BadRequest("Невозможно получить данные о клиентском приложении");
             }
-                
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client == null)
+            Request? request = await _database.GetRequestByCode(code);
+            if (request != null)
             {
-                return Unauthorized("Клиентское приложение не авторизовано");
-            }
-            
-            AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
-            string currentScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
-            string userId = authResult.Principal?.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-            if (!currentScope.Contains("refresh"))
-            {
-                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
-            }
-
-            var handler = new JwtSecurityTokenHandler();
-            string token = authResult.Ticket?.Properties.GetTokens().First().Value ?? "";
-            string id = handler.ReadJwtToken(token).Header.Kid;
-            
-            if (await _database.IsKeyValid(id))
-            {
-                if (!await _lakeService.DeleteKey(id))
+                byte[] hashVerifier = HashCode(verifier);
+                if (IsHashCodeValid(hashVerifier, Encoding.UTF8.GetBytes(request.Verifier)))
                 {
-                    return Problem("Озеро ключей не удалило ключ");
-                }
-                if (!await _database.DeleteAuthKey(id)) 
-                { 
-                    return Problem("Текущий идентификатор ключа подписи не удалён из базы данных"); 
-                }
+                    string keyId = Guid.NewGuid().ToString();
+                    string payload = _kvService.CreateKey(keyId);
+                    var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
+                    if (!await _database.CreateAuthKey(key.KeyId, _audience, request.User))
+                    {
+                        return Problem("Новый ключ подписи не создан в базе данных");
+                    }
 
+                    StringBuilder validScopes = new();
+                    List<string> acceptedScopes = await _database.GetAccepts(request.User, client.Name ?? "");
+                    if (!string.IsNullOrEmpty(scope))
+                    {
+                        validScopes.AppendJoin(" ", client.Scopes.Intersect(acceptedScopes).Intersect(scope.Split(" ")));
+                    }
+                    else
+                    {
+                        validScopes.AppendJoin(" ", client.Scopes.Intersect(acceptedScopes));
+                    }
+
+                    string access = CreateAccessToken(request.User, key, validScopes.ToString(), client.Name ?? "");
+                    string refresh = CreateRefreshToken(request.User, key, client.Name ?? "");
+                    var result = new
+                    {
+                        access_token = access,
+                        refresh_token = refresh
+                    };
+                    return Ok(result);
+                }
+                else
+                {
+                    return BadRequest("Запрос не авторизован системой");
+                }
+            }
+            else
+            {
+                return BadRequest("Неправильный запрос");
+            }
+        }
+        [Client]
+        [HttpPost("token/refresh")]
+        public async Task<ActionResult> GetToken([FromForm] string scope)
+        {
+            var auth = await HttpContext.AuthenticateAsync();
+            var tokenScope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!tokenScope.Contains("refresh"))
+            {
+                return BadRequest("Представленный токен не предназначен для доступа к этому ресурсу");
+            }
+            var token = auth.Properties?.GetTokens().First().Value;
+            var handler = new JwtSecurityTokenHandler();
+            var kid = handler.ReadJwtToken(token).Header.Kid;
+            if (await _database.IsKeyValid(kid))
+            {
+                if (!_kvService.DeleteKey(kid))
+                {
+                    return Problem("Хранилище секретов не удалило ключ");
+                }
+                if (!await _database.DeleteAuthKey(kid))
+                {
+                    return Problem("База данных не удалила идентификатор ключа");
+                }
+                Client? client = (Client?)HttpContext.Items["client"];
+                string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
                 string keyId = Guid.NewGuid().ToString();
-                string payload = await _lakeService.CreateKey(keyId);
+                string payload = _kvService.CreateKey(keyId);
                 var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                if(!await _database.CreateAuthKey(key.KeyId, _audience, userId))
+                if (!await _database.CreateAuthKey(key.KeyId, _audience, user))
                 {
                     return Problem("Новый ключ подписи не создан в базе данных");
                 }
 
-                List<string> acceptedScopes = await _database.GetAccepts(userId, client);
-                StringBuilder validScopes = new StringBuilder();
+                StringBuilder validScopes = new();
+                List<string> acceptedScopes = await _database.GetAccepts(user, client?.Name ?? "");
                 if (!string.IsNullOrEmpty(scope))
                 {
-                    validScopes.AppendJoin(" ", _client.Scopes.Intersect(acceptedScopes).Intersect(scope.Split(" ")));
+                    validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes).Intersect(scope.Split(" ")));
                 }
                 else
                 {
-                    validScopes.AppendJoin(" ", _client.Scopes.Intersect(acceptedScopes));
+                    validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes));
                 }
 
-                string access = CreateAccessToken(userId, key, validScopes.ToString());
-                string refresh = CreateRefreshToken(userId, key);
+                string access = CreateAccessToken(user, key, validScopes.ToString(), client.Name ?? "");
+                string refresh = CreateRefreshToken(user, key, client.Name ?? "");
                 var result = new
                 {
                     access_token = access,
@@ -303,28 +320,140 @@ namespace NAuthAPI.Controllers
             }
             else
             {
-                return BadRequest("Токен не представлен в системе или уже деактивирован");
+                return Unauthorized();
             }
         }
+        [TrustClient]
         [HttpGet("token/reset")]
-        public async Task<ActionResult> GetResetToken([FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> GetResetToken()
         {
-            return await CreateToken("reset", client, secret);
-        }
-        [HttpGet("token/accept")]
-        public async Task<ActionResult> GetAcceptToken([FromHeader] string client, [FromHeader] string secret)
-        {
-            return await CreateToken("accept", client, secret);
-        }
-        [HttpDelete("token")]
-        public async Task<ActionResult> RevokeToken([FromHeader] string client_id, [FromHeader] string client_secret)
-        {
-            if (!IsDBInitialized)
-                return Problem("Драйвер базы данных не инициализирован");
-            var client = await Client.GetClientAsync(_database, client_id, client_secret);
-            if (client == null)
-                return BadRequest("Клиентское приложение не авторизовано");
+            var auth = await HttpContext.AuthenticateAsync();
+            var tokenScope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!tokenScope.Contains("refresh"))
+            {
+                return BadRequest("Представленный токен не предназначен для доступа к этому ресурсу");
+            }
+            var token = auth.Properties?.GetTokens().First().Value;
+            var handler = new JwtSecurityTokenHandler();
+            var kid = handler.ReadJwtToken(token).Header.Kid;
+            if (await _database.IsKeyValid(kid))
+            {
+                if (!_kvService.DeleteKey(kid))
+                {
+                    return Problem("Хранилище секретов не удалило ключ");
+                }
+                if (!await _database.DeleteAuthKey(kid))
+                {
+                    return Problem("База данных не удалила идентификатор ключа");
+                }
+                Client? client = (Client?)HttpContext.Items["client"];
+                string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+                string keyId = Guid.NewGuid().ToString();
+                string payload = _kvService.CreateKey(keyId);
+                var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
+                if (!await _database.CreateAuthKey(key.KeyId, _audience, user))
+                {
+                    return Problem("Новый ключ подписи не создан в базе данных");
+                }
 
+                StringBuilder validScopes = new();
+                List<string> acceptedScopes = await _database.GetAccepts(user, client?.Name ?? "");
+                validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes).Intersect("reset".Split(" ")));
+
+                string access = CreateAccessToken(user, key, validScopes.ToString(), client.Name ?? "");
+                string refresh = CreateRefreshToken(user, key, client.Name ?? "");
+                var result = new
+                {
+                    access_token = access,
+                    refresh_token = refresh
+                };
+                return Ok(result);
+            }
+            else
+            {
+                return Unauthorized();
+            }
+        }
+        [TrustClient]
+        [HttpGet("token/accept")]
+        public async Task<ActionResult> GetAcceptToken()
+        {
+            var auth = await HttpContext.AuthenticateAsync();
+            var tokenScope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
+            if (!tokenScope.Contains("refresh"))
+            {
+                return BadRequest("Представленный токен не предназначен для доступа к этому ресурсу");
+            }
+            var token = auth.Properties?.GetTokens().First().Value;
+            var handler = new JwtSecurityTokenHandler();
+            var kid = handler.ReadJwtToken(token).Header.Kid;
+            if (await _database.IsKeyValid(kid))
+            {
+                if (!_kvService.DeleteKey(kid))
+                {
+                    return Problem("Хранилище секретов не удалило ключ");
+                }
+                if (!await _database.DeleteAuthKey(kid))
+                {
+                    return Problem("База данных не удалила идентификатор ключа");
+                }
+                Client? client = (Client?)HttpContext.Items["client"];
+                string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+                string keyId = Guid.NewGuid().ToString();
+                string payload = _kvService.CreateKey(keyId);
+                var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
+                if (!await _database.CreateAuthKey(key.KeyId, _audience, user))
+                {
+                    return Problem("Новый ключ подписи не создан в базе данных");
+                }
+
+                StringBuilder validScopes = new();
+                List<string> acceptedScopes = await _database.GetAccepts(user, client?.Name ?? "");
+                validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes).Intersect("accept".Split(" ")));
+
+                string access = CreateAccessToken(user, key, validScopes.ToString(), client.Name ?? "");
+                string refresh = CreateRefreshToken(user, key, client.Name ?? "");
+                var result = new
+                {
+                    access_token = access,
+                    refresh_token = refresh
+                };
+                return Ok(result);
+            }
+            else
+            {
+                return Unauthorized();
+            }
+        }
+        [TrustClient]
+        [HttpPost("flow")]
+        public async Task<ActionResult> CreateAuthorizationFlow([FromForm] string code_verifier, [FromForm] string secret, [FromForm] string scope, [FromForm] string client, [FromForm] string user)
+        {
+            if (!await Client.Authenticate(_database, client, secret))
+            {
+                return BadRequest("Клиентское приложение не авторизовано");
+            }
+            Request request = new()
+            {
+                Client = client,
+                Scope = scope,
+                Code = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64)),
+                Verifier = code_verifier,
+                User = user
+            };
+            if (await _database.CreateRequest(request))
+            {
+                return Accepted();
+            }
+            else
+            {
+                return Problem("База данных не выполнила запрос");
+            }
+        }
+        [Client]
+        [HttpDelete("token")]
+        public async Task<ActionResult> RevokeToken()
+        {
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             if (!scope.Contains("refresh"))
@@ -334,7 +463,7 @@ namespace NAuthAPI.Controllers
             var token = auth.Properties?.GetTokens().First().Value;
             var handler = new JwtSecurityTokenHandler();
             var kid = handler.ReadJwtToken(token).Header.Kid;
-            if (!await _lakeService.DeleteKey(kid))
+            if (!_kvService.DeleteKey(kid))
             {
                 return Problem("Ключ подписи не удалён из озера ключей");
             }
@@ -342,27 +471,12 @@ namespace NAuthAPI.Controllers
             {
                 return Problem("Идентификатор ключа подписи не удалён из базы данных");
             }
-            return Ok();
+            return Accepted();
         }
-        [HttpPost("accept")]
-        public async Task<ActionResult> AcceptData([FromQuery] string issuer, [FromQuery] string scope, [FromHeader] string client, [FromHeader] string secret)
+        [TrustClient]
+        [HttpGet("accept")]
+        public async Task<ActionResult> AcceptData([FromQuery] string issuer, [FromQuery] string scope)
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client != null)
-            {
-                if (_client.IsImplementation)
-                {
-                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
-                }
-            }
-            else
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
             string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             if (!tokenScope.Contains("accept"))
@@ -390,25 +504,10 @@ namespace NAuthAPI.Controllers
                 return Problem();
             }
         }
-        [HttpPost("revoke")]
-        public async Task<ActionResult> RevokeData([FromQuery] string issuer, [FromQuery] string? scope, [FromHeader] string client, [FromHeader] string secret)
+        [TrustClient]
+        [HttpGet("revoke")]
+        public async Task<ActionResult> RevokeData([FromQuery] string issuer, [FromQuery] string? scope)
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client != null)
-            {
-                if (_client.IsImplementation)
-                {
-                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
-                }
-            }
-            else
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
             string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             if (!tokenScope.Contains("refresh"))
@@ -444,27 +543,10 @@ namespace NAuthAPI.Controllers
                 return Problem();
             }
         }
+        [Client]
         [HttpGet("signout")]
-        public async Task<ActionResult> SignOut([FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> UserSignOut()
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-                
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client != null)
-            {
-                if (_client.IsImplementation)
-                {
-                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
-                }
-            }
-            else
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
-
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             if (!scope.Contains("refresh"))
@@ -480,7 +562,7 @@ namespace NAuthAPI.Controllers
 
             var keys = await _database.GetUserKeys(id);
             foreach (var key in keys)
-                await _lakeService.DeleteKey(key);
+                _kvService.DeleteKey(key);
             if (await _database.DeleteUserAuthKeys(id))
             {
                 return Ok();
@@ -490,27 +572,10 @@ namespace NAuthAPI.Controllers
                 return Problem("Не удалось выполнить выход");
             }
         }
+        [TrustClient]
         [HttpPost("reset")]
-        public async Task<ActionResult> ResetPassword([FromForm] string password, [FromHeader] string client, [FromHeader] string secret)
+        public async Task<ActionResult> ResetPassword([FromForm] string password)
         {
-            if (!IsDBInitialized)
-            {
-                return Problem("Драйвер базы данных не инициализирован");
-            }
-
-            Client? _client = await Client.GetClientAsync(_database, client, secret);
-            if (_client != null)
-            {
-                if (_client.IsImplementation)
-                {
-                    return BadRequest("Клиент не имеет доверенной реализации потока системы");
-                }
-            }
-            else
-            {
-                return BadRequest("Клиентское приложение не авторизовано");
-            }
-
             var auth = await HttpContext.AuthenticateAsync();
             var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
             if (!scope.Contains("reset"))
@@ -554,7 +619,7 @@ namespace NAuthAPI.Controllers
         private async Task<byte[]> HashPassword(string password, string guid, byte[] salt)
         {
             byte[] _password = Encoding.UTF8.GetBytes(password);
-            using (var argon2 = new Argon2id(_password)//Recommended parameters by OWASP
+            using var argon2 = new Argon2id(_password)//Recommended parameters by OWASP
             {
                 DegreeOfParallelism = 1,
                 MemorySize = 19456,
@@ -562,49 +627,55 @@ namespace NAuthAPI.Controllers
                 Salt = salt,
                 AssociatedData = Encoding.UTF8.GetBytes(guid),
                 KnownSecret = Encoding.UTF8.GetBytes(_pepper)
-            })
-            {
-                var hash = await argon2.GetBytesAsync(32);
+            };
+            var hash = await argon2.GetBytesAsync(32);
 
-                argon2.Dispose();
-                argon2.Reset();
-                //argon2 = null;//Releases memmory (without leak)
-                GC.Collect();
+            argon2.Dispose();
+            argon2.Reset();
+            //argon2 = null;//Releases memmory (without leak)
+            GC.Collect();
 
-                return hash;
-            }
+            return hash;
+        }
+        private static byte[] HashCode(string code)
+        {
+            return SHA256.HashData(Encoding.UTF8.GetBytes(code));
+        }
+        private static bool IsHashCodeValid(byte[] actual, byte[] expected)
+        {
+            return expected.SequenceEqual(actual);
         }
         private static bool IsHashValid(byte[] hash, string db_hash) => hash.SequenceEqual(Convert.FromBase64String(db_hash));
-        private string CreateIdToken(IEnumerable<Claim> claims, SymmetricSecurityKey key)
+        private string CreateIdToken(IEnumerable<Claim> claims, SymmetricSecurityKey key, string audience)
         {
             _ = claims.Append(new Claim("scope", "id", ClaimValueTypes.String, _issuer));
-            var token = CreateToken(claims, key, TimeSpan.FromHours(10));
+            var token = CreateToken(claims, key, TimeSpan.FromHours(10), audience);
             return token;
         }
-        private string CreateRefreshToken(string guid, SymmetricSecurityKey key)
+        private string CreateRefreshToken(string guid, SymmetricSecurityKey key, string audience)
         {
             var claims = new List<Claim>() { 
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
                 new Claim("scope", "refresh accept", ClaimValueTypes.String, _issuer)
             };
-            var token = CreateToken(claims, key, TimeSpan.FromDays(14));
+            var token = CreateToken(claims, key, TimeSpan.FromDays(14), audience);
             return token;
         }
-        private string CreateAccessToken(string guid, SymmetricSecurityKey key, string scope)
+        private string CreateAccessToken(string guid, SymmetricSecurityKey key, string scope, string audience)
         {
             var claims = new List<Claim>() {
                 new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
                 new Claim("scope", scope, ClaimValueTypes.String, _issuer)
             };
-            var token = CreateToken(claims, key, TimeSpan.FromHours(1));
+            var token = CreateToken(claims, key, TimeSpan.FromHours(1), audience);
             return token;
         }
-        private string CreateToken(IEnumerable<Claim> claims, SymmetricSecurityKey key, TimeSpan lifetime)
+        private string CreateToken(IEnumerable<Claim> claims, SymmetricSecurityKey key, TimeSpan lifetime, string audience)
         {
             var now = DateTime.UtcNow;
             var jwt = new JwtSecurityToken(
                 _issuer,
-                _audience,
+                audience,
                 claims,
                 now,
                 now.Add(lifetime),

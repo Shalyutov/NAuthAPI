@@ -8,13 +8,13 @@ namespace NAuthAPI.Controllers
     public class OrgController : ControllerBase
     {
         private readonly AppContext _database;
-        private bool IsDBInitialized => _database != null;
         public OrgController(AppContext db)
         {
             _database = db;
         }
         #region Endpoints Logic
-        [HttpPost("client")]
+        //TODO Clients
+        /*[HttpPost("client")]
         public async Task<ActionResult> CreateClient([FromQuery] string client)
         {
             return NoContent();
@@ -33,7 +33,7 @@ namespace NAuthAPI.Controllers
         public async Task<ActionResult> GetClient([FromQuery] string client)
         {
             return NoContent();
-        }
+        }*/
         #endregion
     }
 }

@@ -6,7 +6,7 @@ using Ydb.Sdk;
 
 namespace NAuthAPI
 {
-    public class KeyLakeService
+    public class KeyLakeService : IKVEngine
     {
         private readonly HttpClient _httpClient;
         private string _apiKey;
@@ -14,14 +14,14 @@ namespace NAuthAPI
         private readonly string _audience;
         private readonly SymmetricSecurityKey key;
 
-        public KeyLakeService(HttpClient httpClient, string lake, string issuer, string audience, string authKey)
+        public KeyLakeService(HttpClient httpClient, string address, string issuer, string audience, byte[] authKey)
         {
             _httpClient = httpClient;
-            _httpClient.BaseAddress = new Uri(lake);
+            _httpClient.BaseAddress = new Uri(address);
             _httpClient.Timeout = TimeSpan.FromSeconds(10);
             _issuer = issuer;
             _audience = audience;
-            key = new SymmetricSecurityKey(Convert.FromBase64String(authKey));
+            key = new SymmetricSecurityKey(authKey);
             _apiKey = GetAccessToken(key);
         }
         private string GetAccessToken(SymmetricSecurityKey key)
@@ -37,7 +37,7 @@ namespace NAuthAPI
             var token = new JwtSecurityTokenHandler().WriteToken(jwt);
             return token;
         }
-        public async Task<string> CreateKey(string id)
+        public string CreateKey(string id)
         {
             if (_apiKey.IsNullOrEmpty())
                 _apiKey = GetAccessToken(key);
@@ -48,10 +48,10 @@ namespace NAuthAPI
                     Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey)
                 }
             };
-            var result = await _httpClient.SendAsync(request);
+            var result = _httpClient.SendAsync(request).Result;
             if (result.StatusCode == System.Net.HttpStatusCode.OK)
             {
-                string key = await result.Content.ReadAsStringAsync();
+                string key = result.Content.ReadAsStringAsync().Result;
                 return new StringBuilder(key).Replace("\"", "").ToString();
             }
             else if (result.StatusCode == System.Net.HttpStatusCode.Unauthorized)
@@ -68,7 +68,7 @@ namespace NAuthAPI
                 throw new Exception("Произошла ошибка при обработке запроса");
             }
         }
-        public async Task<string> GetKey(string id)
+        public string GetKey(string id)
         {
             if (_apiKey.IsNullOrEmpty())
                 _apiKey = GetAccessToken(key);
@@ -79,10 +79,10 @@ namespace NAuthAPI
                     Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey)
                 }
             };
-            var result = await _httpClient.SendAsync(request);
+            var result = _httpClient.SendAsync(request).Result;
             if (result.StatusCode == System.Net.HttpStatusCode.OK)
             {
-                string key = await result.Content.ReadAsStringAsync();
+                string key = result.Content.ReadAsStringAsync().Result;
                 return new StringBuilder(key).Replace("\"", "").ToString();
             }
             else if (result.StatusCode == System.Net.HttpStatusCode.Unauthorized)
@@ -99,7 +99,7 @@ namespace NAuthAPI
                 throw new Exception("Произошла ошибка при обработке запроса");
             }
         }
-        public async Task<bool> DeleteKey(string id)
+        public bool DeleteKey(string id)
         {
             if (_apiKey.IsNullOrEmpty())
                 _apiKey = GetAccessToken(key);
@@ -110,7 +110,7 @@ namespace NAuthAPI
                     Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey)
                 }
             };
-            var result = await _httpClient.SendAsync(request);
+            var result = _httpClient.SendAsync(request).Result;
             if (result.StatusCode == System.Net.HttpStatusCode.Accepted)
             {
                 return true;
@@ -128,6 +128,10 @@ namespace NAuthAPI
             {
                 throw new Exception("Произошла ошибка при обработке запроса");
             }
+        }
+        public string GetPepper()
+        {
+            return GetKey("Pepper");
         }
     }
 }

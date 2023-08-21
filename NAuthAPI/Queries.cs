@@ -59,7 +59,7 @@
         public static string GetClient = @"
         DECLARE $id AS Utf8;
         SELECT
-            name, secret, valid, implement, scopes
+            name, secret, valid, trust, scopes
         FROM
             clients
         WHERE 
@@ -74,6 +74,36 @@
             clients (name, secret, valid, implement, scopes)
         VALUES
             ($id, $secret, $valid, $impl, $scopes);";
+        public static string CreateRequest = @"
+        DECLARE $user AS Utf8;
+        DECLARE $verifier AS Utf8;
+        DECLARE $client AS Utf8;
+        DECLARE $stamp AS Datetime;
+        DECLARE $scope AS Utf8;
+        INSERT INTO
+            requests (user, verifier, client, stamp, scope)
+        VALUES
+            ($user, $verifier, $client, $stamp, $scope);";
+        public static string GetRequest = @"
+        DECLARE $client AS Utf8;
+        DECLARE $verifier As Utf8;
+        SELECT 
+            user, verifier, client, stamp, scope
+        FROM
+            requests
+        WHERE
+            client = $client
+            AND verifier = $verifier;
+        ";
+        public static string GetRequestByCode = @"
+        DECLARE $code AS Utf8;
+        SELECT 
+            user, verifier, client, stamp, scope
+        FROM
+            requests
+        WHERE
+            code = $code;
+        ";
         public static string GetKey = @"
         DECLARE $id AS Utf8;
         SELECT
@@ -100,6 +130,13 @@
             keys
         WHERE 
             kid = $id;";
+        public static string DeleteRequest = @"
+        DECLARE $code AS Utf8;
+        DELETE
+        FROM
+            requests
+        WHERE 
+            code = $code;";
         public static string DeleteClaim = @"
         DECLARE $id AS Utf8;
         DECLARE $type AS Utf8;
