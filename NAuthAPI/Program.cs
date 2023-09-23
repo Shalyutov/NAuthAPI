@@ -15,7 +15,7 @@ using Ydb.Sdk.Yc;
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 
-string keypath = builder.Configuration["DatabaseAuth"] ?? "";
+string keypath = builder.Configuration["AuthKey"] ?? "";
 string endpoint = builder.Configuration["Endpoint"] ?? "";
 string databasePath = builder.Configuration["Database"] ?? "";
 
@@ -41,7 +41,7 @@ if (keypath != "") //Используем авторизованный ключ доступа если он задан в наст
 }
 else
 {
-    provider = new AnonymousProvider();
+    provider = new AnonymousProvider(); //анонимная аутентификация по умолчанию если не задан ключ
 }
 
 for(int i = 0; i < 6; i++)//retry connect //переподключение

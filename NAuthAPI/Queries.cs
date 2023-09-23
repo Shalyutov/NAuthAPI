@@ -3,77 +3,77 @@
     class Queries
     {
         public static string NullAttempt = @"
-        DECLARE $id AS Utf8;
+        DECLARE $guid AS Utf8;
         UPDATE
             users
         SET
             attempt = CAST(0 as Uint8)
         WHERE
-            guid = $id;
+            guid = $guid;
         ";
         public static string AddAttempt = @"
-        DECLARE $id AS Utf8;
+        DECLARE $guid AS Utf8;
         UPDATE
             users
         SET
             attempt = attempt + CAST(1 as Uint8)
         WHERE
-            guid = $id;
+            guid = $guid;
         ";
         public static string SetPasswordHash = @"
-        DECLARE $id AS Utf8;
+        DECLARE $guid AS Utf8;
         DECLARE $hash AS Utf8;
         UPDATE
             users
         SET
             hash = $hash
         WHERE
-            guid = $id;
+            guid = $guid;
         ";
         public static string SetClaim = @"
-        DECLARE $id AS Utf8;
+        DECLARE $guid AS Utf8;
         DECLARE $type AS Utf8;
         DECLARE $value AS Utf8;
         DECLARE $issuer AS Utf8;
         UPSERT INTO
             claims (issuer, type, value, audience)
         VALUES
-            ($issuer, $type, $value, $id);
+            ($issuer, $type, $value, $guid);
         ";
         public static string GetIdentityUsername = @"
-        DECLARE $id AS Utf8;
+        DECLARE $username AS Utf8;
         SELECT
             hash, name, surname, guid, salt, lastname, email, phone, blocked, attempt, gender, username
         FROM
             users
         WHERE 
-            username = $id;";
+            username = $username;";
         public static string GetIdentityId = @"
-        DECLARE $id AS Utf8;
+        DECLARE $guid AS Utf8;
         SELECT
             hash, name, surname, guid, salt, lastname, email, phone, blocked, attempt, gender, username
         FROM
             users
         WHERE 
-            guid = $id;";
+            guid = $guid;";
         public static string GetClient = @"
-        DECLARE $id AS Utf8;
+        DECLARE $name AS Utf8;
         SELECT
             name, secret, valid, trust, scopes
         FROM
             clients
         WHERE 
-            name = $id;";
+            name = $name;";
         public static string CreateClient = @"
-        DECLARE $id AS Utf8;
+        DECLARE $name AS Utf8;
         DECLARE $secret AS Utf8;
         DECLARE $valid AS Bool;
-        DECLARE $impl AS Bool;
+        DECLARE $trust AS Bool;
         DECLARE $scopes AS Utf8;
         INSERT INTO
-            clients (name, secret, valid, implement, scopes)
+            clients (name, secret, valid, trust, scopes)
         VALUES
-            ($id, $secret, $valid, $impl, $scopes);";
+            ($name, $secret, $valid, $trust, $scopes);";
         public static string CreateRequest = @"
         DECLARE $user AS Utf8;
         DECLARE $verifier AS Utf8;
@@ -107,13 +107,13 @@
         public static string GetKey = @"
         DECLARE $id AS Utf8;
         SELECT
-            kid, user, audience
+            id, user, audience
         FROM
             keys
         WHERE 
-            kid = $id;";
+            id = $id;";
         public static string GetClaims = @"
-        DECLARE $id AS Utf8;
+        DECLARE $user AS Utf8;
         DECLARE $list AS List<Utf8>;
         SELECT
             issuer, type, value
@@ -121,7 +121,7 @@
             claims
         WHERE 
             type IN $list
-            AND audience = $id;
+            AND audience = $user;
         ";
         public static string DeleteKey = @"
         DECLARE $id AS Utf8;
@@ -129,7 +129,7 @@
         FROM
             keys
         WHERE 
-            kid = $id;";
+            id = $id;";
         public static string DeleteRequest = @"
         DECLARE $code AS Utf8;
         DELETE
@@ -138,13 +138,13 @@
         WHERE 
             code = $code;";
         public static string DeleteClaim = @"
-        DECLARE $id AS Utf8;
+        DECLARE $user AS Utf8;
         DECLARE $type AS Utf8;
         DELETE
         FROM
             claims
         WHERE 
-            audience = $id
+            audience = $user
             AND type = $type;";
         public static string DeleteUserKeys = @"
         DECLARE $user AS Utf8;
@@ -156,21 +156,21 @@
         public static string GetUserKeys = @"
         DECLARE $user AS Utf8;
         SELECT
-            kid
+            id
         FROM
             keys
         WHERE 
             user = $user;";
-        public static string GetUsername = @"
-        DECLARE $id AS Utf8;
+        public static string IsUserExists = @"
+        DECLARE $username AS Utf8;
         SELECT
             guid
         FROM
             users
         WHERE 
-            username = $id;";
+            username = $username;";
         public static string CreateAccount = @"
-        DECLARE $id As Utf8;
+        DECLARE $guid As Utf8;
         DECLARE $username AS Utf8;
         DECLARE $surname AS Utf8;
         DECLARE $name AS Utf8;
@@ -185,62 +185,62 @@
         INSERT INTO 
             users (guid, username, surname, name, lastname, hash, salt, email, phone, gender, attempt, blocked) 
         VALUES
-            ($id, $username, $surname, $name, $lastname, $hash, $salt, $email, $phone, $gender, $attempt, CAST($blocked AS Bool));";
+            ($guid, $username, $surname, $name, $lastname, $hash, $salt, $email, $phone, $gender, $attempt, CAST($blocked AS Bool));";
         public static string CreateSignIn = @"
         DECLARE $id As Utf8;
         DECLARE $user AS Utf8;
         DECLARE $audience AS Utf8;
         INSERT INTO 
-            keys (kid, user, audience) 
+            keys (id, user, audience) 
         VALUES
             ($id, $user, $audience);
         ";
         public static string DeleteAccount = @"
-        DECLARE $id As Utf8;
+        DECLARE $guid As Utf8;
         DELETE FROM
             users
         WHERE
-            guid = $id;
+            guid = $guid;
         ";
         public static string CreateAccept = @"
         DECLARE $client As Utf8;
-        DECLARE $user_id AS Utf8;
+        DECLARE $user AS Utf8;
         DECLARE $scope AS Utf8;
         DECLARE $datetime AS Datetime
         INSERT INTO 
             accept (client, user, scope, date) 
         VALUES
-            ($client, $user_id, $scope, $datetime);
+            ($client, $user, $scope, $datetime);
         ";
         public static string DeleteAccept = @"
-        DECLARE $user_id As Utf8;
+        DECLARE $user As Utf8;
         DECLARE $client As Utf8;
         DECLARE $type As Utf8;
         DELETE FROM
             accept
         WHERE
-            user = $user_id 
+            user = $user 
             AND client = $client
-            AND type = #type;
+            AND type = $type;
         ";
         public static string DeleteAllAccept = @"
-        DECLARE $user_id As Utf8;
+        DECLARE $user As Utf8;
         DECLARE $client As Utf8;
         DELETE FROM
             accept
         WHERE
-            user = $user_id 
+            user = $user 
             AND client = $client;
         ";
         public static string SelectAccept = @"
-        DECLARE $user_id As Utf8;
+        DECLARE $user As Utf8;
         DECLARE $client As Utf8;
         SELECT 
             scope
         FROM
             accept
         WHERE
-            user = $user_id 
+            user = $user
             AND client = $client;
         ";
     }

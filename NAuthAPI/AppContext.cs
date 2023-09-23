@@ -33,9 +33,22 @@ namespace NAuthAPI
         }
         public async Task<Account?> GetAccount(string claim, string query)
         {
+            string paramName;
+            if (query == Queries.GetIdentityUsername)
+            {
+                paramName = "$username";
+            }
+            else if (query == Queries.GetIdentityId)
+            {
+                paramName = "$guid";
+            }
+            else
+            {
+                throw new ArgumentException("Запрос не предопределён");
+            }
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$id", YdbValue.MakeUtf8(claim) }
+                { paramName, YdbValue.MakeUtf8(claim) }
             };
             var queryResponse = await ExecuteQuery(query, parameters);
             var sets = queryResponse.Result.ResultSets;
@@ -69,9 +82,9 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$id", YdbValue.MakeUtf8(username) }
+                { "$username", YdbValue.MakeUtf8(username) }
             };
-            var queryResponse = await ExecuteQuery(Queries.GetUsername, parameters);
+            var queryResponse = await ExecuteQuery(Queries.IsUserExists, parameters);
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count > 0)
             {
@@ -91,7 +104,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$id", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "") },
+                { "$guid", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "") },
                 { "$username", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Upn)?.Value ?? "") },
                 { "$surname", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Surname)?.Value ?? "") },
                 { "$name", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Name)?.Value ?? "") },
@@ -114,9 +127,9 @@ namespace NAuthAPI
             StringBuilder bindings = new();
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$id", YdbValue.MakeUtf8(username) }
+                { "$guid", YdbValue.MakeUtf8(username) }
             };
-            queryBuilder.AppendLine($"DECLARE $id AS Utf8;");
+            queryBuilder.AppendLine($"DECLARE $guid AS Utf8;");
             var stringScopes = "surname name lastname email gender".Split(" ");
             var uint64Scopes = "phone".Split(" ");
             foreach (var record in claims)
@@ -145,7 +158,7 @@ namespace NAuthAPI
             {
                 return true;
             }
-            queryBuilder.AppendLine($"UPDATE users SET {bindings.ToString()} WHERE guid = $id");
+            queryBuilder.AppendLine($"UPDATE users SET {bindings.ToString()} WHERE guid = $guid");
             var response = await ExecuteQuery(queryBuilder.ToString(), parameters);
             return response.Status.IsSuccess;
         }
@@ -153,7 +166,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$id", YdbValue.MakeUtf8(user) }
+                { "$guid", YdbValue.MakeUtf8(user) }
             };
             var response = await ExecuteQuery(Queries.DeleteAccount, parameters);
             return response.Status.IsSuccess;
@@ -222,7 +235,7 @@ namespace NAuthAPI
                 List<string> keys = new();
                 foreach (var row in sets[0].Rows)
                 {
-                    var kid = row["kid"].GetOptionalUtf8();
+                    var kid = row["id"].GetOptionalUtf8();
                     if (kid != null)
                     {
                         keys.Add(kid);
@@ -241,7 +254,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>() 
             {
-                { "$id", YdbValue.MakeUtf8(name) }
+                { "$name", YdbValue.MakeUtf8(name) }
             };
             var response = await ExecuteQuery(Queries.GetClient, parameters);
             var sets = response.Result.ResultSets;
@@ -264,7 +277,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$id", YdbValue.MakeUtf8(user) }
+                { "$guid", YdbValue.MakeUtf8(user) }
             };
             var response = await ExecuteQuery(Queries.NullAttempt, parameters);
             return response.Status.IsSuccess;
@@ -273,7 +286,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$id", YdbValue.MakeUtf8(user) }
+                { "$guid", YdbValue.MakeUtf8(user) }
             };
             var response = await ExecuteQuery(Queries.AddAttempt, parameters);
             return response.Status.IsSuccess;
@@ -282,7 +295,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$id", YdbValue.MakeUtf8(id) },
+                { "$guid", YdbValue.MakeUtf8(id) },
                 { "$hash", YdbValue.MakeUtf8(hash) }
             };
             var response = await ExecuteQuery(Queries.SetPasswordHash, parameters);
@@ -294,7 +307,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$user", YdbValue.MakeUtf8(user_id) },
                 { "$client", YdbValue.MakeUtf8(client) },
                 { "$scope", YdbValue.MakeUtf8(scope) },
                 { "$datetime", YdbValue.MakeDatetime(DateTime.Now) },
@@ -306,7 +319,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$user", YdbValue.MakeUtf8(user_id) },
                 { "$client", YdbValue.MakeUtf8(client) }
             };
             var response = await ExecuteQuery(Queries.SelectAccept, parameters);
@@ -325,7 +338,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$user", YdbValue.MakeUtf8(user_id) },
                 { "$client", YdbValue.MakeUtf8(client) },
                 { "$type", YdbValue.MakeUtf8(type) }
             };
@@ -336,7 +349,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$user_id", YdbValue.MakeUtf8(user_id) },
+                { "$user", YdbValue.MakeUtf8(user_id) },
                 { "$client", YdbValue.MakeUtf8(client) }
             };
             var response = await ExecuteQuery(Queries.DeleteAllAccept, parameters);
@@ -350,7 +363,7 @@ namespace NAuthAPI
             foreach (string claim in claims) list.Add(YdbValue.MakeUtf8(claim));
             var parameters = new Dictionary<string, YdbValue>
             {
-                { "$id", YdbValue.MakeUtf8(id) },
+                { "$user", YdbValue.MakeUtf8(id) },
                 { "$list", YdbValue.MakeList(list) }
             };
             var queryResponse = await ExecuteQuery(Queries.GetClaims, parameters);
@@ -380,7 +393,7 @@ namespace NAuthAPI
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
-                { "$id", YdbValue.MakeUtf8(id) },
+                { "$guid", YdbValue.MakeUtf8(id) },
                 { "$issuer", YdbValue.MakeUtf8(issuer) },
                 { "$type", YdbValue.MakeUtf8(type) },
                 { "$value", YdbValue.MakeUtf8(value) },
