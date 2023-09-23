@@ -133,7 +133,7 @@ namespace NAuthAPI.Controllers
             await _database.DeleteUserAuthKeys(id);
             foreach (string item in "user sign reset delete".Split(" "))
             {
-                await _database.DeleteAccept(id, "NAuth", item);
+                await _database.DeleteAccept(id, (HttpContext.Items["client"] as Client)?.Name ?? "", item);
             }
 
             if (await _database.DeleteAccount(id))

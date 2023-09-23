@@ -340,7 +340,7 @@ namespace NAuthAPI
             {
                 { "$user", YdbValue.MakeUtf8(user_id) },
                 { "$client", YdbValue.MakeUtf8(client) },
-                { "$type", YdbValue.MakeUtf8(type) }
+                { "$scope", YdbValue.MakeUtf8(type) }
             };
             var response = await ExecuteQuery(Queries.DeleteAccept, parameters);
             return response.Status.IsSuccess;

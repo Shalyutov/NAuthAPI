@@ -192,7 +192,7 @@ namespace NAuthAPI.Controllers
             {
                 foreach(string item in "user reset delete".Split(" "))
                 {
-                    await _database.CreateAccept(id, "NAuth", item);
+                    var res = await _database.CreateAccept(id, (HttpContext.Items["client"] as Client)?.Name ?? "", item);
                 }
                 
                 if (await _database.CreateAuthKey(key.KeyId, _audience, id))

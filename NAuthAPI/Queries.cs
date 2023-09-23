@@ -206,22 +206,22 @@
         DECLARE $client As Utf8;
         DECLARE $user AS Utf8;
         DECLARE $scope AS Utf8;
-        DECLARE $datetime AS Datetime
+        DECLARE $datetime AS Datetime;
         INSERT INTO 
-            accept (client, user, scope, date) 
+            accept (client, user, scope, issued) 
         VALUES
             ($client, $user, $scope, $datetime);
         ";
         public static string DeleteAccept = @"
         DECLARE $user As Utf8;
         DECLARE $client As Utf8;
-        DECLARE $type As Utf8;
+        DECLARE $scope As Utf8;
         DELETE FROM
             accept
         WHERE
             user = $user 
             AND client = $client
-            AND type = $type;
+            AND scope = $scope;
         ";
         public static string DeleteAllAccept = @"
         DECLARE $user As Utf8;
