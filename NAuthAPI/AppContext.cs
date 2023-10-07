@@ -102,6 +102,8 @@ namespace NAuthAPI
         #region Account Management
         public async Task<bool> CreateAccount(Account account)
         {
+            ulong phone = 0;
+            ulong.TryParse(account.Identity.FindFirst(ClaimTypes.MobilePhone)?.Value ?? "0", out phone);
             var parameters = new Dictionary<string, YdbValue>
             {
                 { "$guid", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "") },
@@ -113,7 +115,7 @@ namespace NAuthAPI
                 { "$salt", YdbValue.MakeUtf8(account.Salt) },
                 { "$gender", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Gender)?.Value ?? "") },
                 { "$email", YdbValue.MakeUtf8(account.Identity.FindFirst(ClaimTypes.Email)?.Value ?? "") },
-                { "$phone", YdbValue.MakeUint64(ulong.Parse(account.Identity.FindFirst(ClaimTypes.MobilePhone)?.Value ?? "0")) },
+                { "$phone", YdbValue.MakeUint64(phone) },
                 { "$attempt", YdbValue.MakeUint8(account.Attempts) },
                 { "$blocked", YdbValue.MakeUint8(account.IsBlocked ? (byte)1 : (byte)0) }
             };
