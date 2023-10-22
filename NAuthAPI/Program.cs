@@ -9,7 +9,7 @@ using NAuthAPI.Controllers;
 using System.Security.Cryptography;
 using Ydb.Sdk;
 using Ydb.Sdk.Auth;
-using Ydb.Sdk.Table;
+using Ydb.Sdk.Services.Table;
 using Ydb.Sdk.Yc;
 
 var builder = WebApplication.CreateBuilder(args);

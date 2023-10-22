@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.SignalR;
 using System.Net;
 using Ydb.Sdk.Auth;
 using Ydb.Sdk;
-using Ydb.Sdk.Table;
 using Ydb.Sdk.Value;
 using Ydb.Sdk.Yc;
 using System.Security.Cryptography;
