@@ -25,43 +25,29 @@ namespace NAuthAPI
                 ?.Metadata
                 ?.GetMetadata<ControllerActionDescriptor>();
             object[] attributes = endpoint?.MethodInfo?.GetCustomAttributes(false) ?? Array.Empty<object>();
+
+            string client = httpContext?.Request.Headers["client"].First() ?? string.Empty;
+            string secret = httpContext?.Request.Headers["secret"].First() ?? string.Empty;
+
             foreach (var item in attributes)
             {
                 if (item as TrustClientAttribute != null)
                 {
-                    string client = httpContext!.Request.Headers["client"].First() ?? string.Empty;
-                    string secret = httpContext!.Request.Headers["secret"].First() ?? string.Empty;
-                    
-                    Client? _client = await Client.GetClientAsync(database, client, secret);
-                    if (_client != null)
+                    if (await ClientValidator.IsTrustedValidClient(database, client, secret))
                     {
-                        if (_client.IsTrusted)
-                        {
-                            httpContext.Items.Add("client", _client);
-                            break;
-                        }
-                        else
-                        {
-                            throw new Exception("Клиентское приложение должно иметь доверенную реализацию");
-                        }
+                        httpContext?.Items.Add("client", client);
+                        break;
                     }
                     else
                     {
-                        throw new Exception("Клиентское приложение должно быть авторизовано");
+                        throw new Exception("Ошибка доступа. Клиентское приложение с недоверенной реализацией.");
                     }
                 }
                 else if (item as ClientAttribute != null)
                 {
-                    string client = httpContext!.Request.Headers["client"].First() ?? string.Empty;
-                    string secret = httpContext!.Request.Headers["secret"].First() ?? string.Empty;
-                    Client? _client = await Client.GetClientAsync(database, client, secret);
-                    if (_client == null)
+                    if (await ClientValidator.IsValidClient(database, client, secret))
                     {
-                        throw new Exception("Клиентское приложение должно быть авторизовано");
-                    }
-                    else
-                    {
-                        httpContext.Items.Add("client", _client);
+                        httpContext?.Items.Add("client", client);
                         break;
                     }
                 }

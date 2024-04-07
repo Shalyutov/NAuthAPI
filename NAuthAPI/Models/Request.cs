@@ -7,6 +7,6 @@
         public required string Verifier { get; set; }
         public required string User { get; set; }
         public required string Scope { get; set; }
-        public DateTime Stamp { get; set; }
+        public DateTime Issued { get; set; }
     }
 }

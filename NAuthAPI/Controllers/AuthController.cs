@@ -27,28 +27,18 @@ using System.Text.Json.Nodes;
 using static Ydb.Monitoring.SelfCheck.Types;
 using Org.BouncyCastle.Asn1.Ocsp;
 using static System.Formats.Asn1.AsnWriter;
+using System.Globalization;
 
 namespace NAuthAPI.Controllers
 {
     [Authorize]
     [Route("auth")]
     [ApiController]
-    public class AuthController : ControllerBase
+    public class AuthController(AuthNames names, AppContext db, IKVEngine kvService) : ControllerBase
     {
-        readonly AppContext _database;
-        readonly IKVEngine _kvService;
-        readonly string _pepper;
-        readonly string _issuer;
-        readonly string _audience;
-        
-        public AuthController(AuthNames names, AppContext db, IKVEngine kvService)
-        {
-            _database = db;
-            _kvService = kvService;
-            _pepper = kvService.GetPepper();
-            _issuer = names.Issuer;
-            _audience = names.Audience;
-        }
+        readonly IKVEngine _kvService = kvService;
+        readonly string _pepper = kvService.GetPepper();
+        readonly AuthNames authNames = names;
 
         #region Endpoints Logic
 
@@ -61,52 +51,57 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Невозможно выполнить вход с пустыми идентификатором и паролем");
             }
-
-            Account? account = await _database.GetAccountByUsername(username);
-            if (account != null)
+            if (username.Length > 64 || password.Length > 32)
             {
-                if (account.IsBlocked)
-                {
-                    return Forbid();
-                }
-                if (account.Attempts > 2)
-                {
-                    return Forbid();
-                }
-                string id = account.Identity.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-                byte[] hash = await HashPassword(password, id, Convert.FromBase64String(account.Salt));
-                if (string.IsNullOrEmpty(account.Hash))
-                {
-                    return Forbid();
-                }
-                if (IsHashValid(hash, account.Hash))
-                {
-                    await _database.NullAttempt(id);
-                    string keyId = Guid.NewGuid().ToString();
-                    var payload = _kvService.CreateKey(keyId);
-                    var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                    string client = ((Client?)HttpContext.Items["client"])!.Name ?? "";
-                    if (await _database.CreateAuthKey(keyId, _audience, id))
-                    {
-                        var result = new
-                        {
-                            id_token = CreateIdToken(account.Identity.Claims, key, client),
-                            refresh_token = CreateRefreshToken(id, key, client)
-                        };
-                        return Ok(result);
-                    }
-                    return NoContent();
-                }
-                else
-                {
-                    await _database.AddAttempt(id);
-                    return Unauthorized("Неправильный логин или пароль");
-                }
+                return BadRequest("Превышено количество символов в логине или пароле");
             }
-            else
+
+            Account? account = await db.GetAccount(username);
+            if (account == null)
             {
                 return Unauthorized("Учётная запись не существует");
             }
+
+            if (account.IsBlocked)
+            {
+                return Forbid();
+            }
+            if (account.Attempts > 2)
+            {
+                return Forbid();
+            }
+
+            byte[] hash = await HashPassword(password, account.Id, account.Salt);
+            if (account.Hash == null)
+            {
+                return Forbid();
+            }
+            if (!IsHashValid(hash, account.Hash))
+            {
+                if (!await db.AddAttempt(account.Id))
+                {
+                    return Problem("Невозможно засчитать попытку входа");
+                }
+                return Unauthorized("Неправильный логин или пароль");
+            }
+
+            if (!await db.NullAttempt(account.Id))
+            {
+                return Problem("Невозможно аннулировать попытки входа");
+            }
+            string keyId = Guid.NewGuid().ToString();
+            byte[] payload = _kvService.CreateKey(keyId);
+            var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
+            string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
+            if (await db.CreateAuthKey(keyId, authNames.Audience, account.Id))
+            {
+                var result = new
+                {
+                    refresh_token = CreateRefreshToken(account.Id, key, client)
+                };
+                return Ok(result);
+            }
+            return NoContent();
         }
         [TrustClient]
         [AllowAnonymous]
@@ -129,144 +124,83 @@ namespace NAuthAPI.Controllers
             {
                 username = form["username"].First() ?? "";
                 password = form["password"].First() ?? "";
-                if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
-                {
-                    return BadRequest("Нельзя создать учётную запись с пустыми идентификатором и паролем");
-                }
             }
             else
             {
                 return BadRequest("Невозможно создать учётную запись без идентификатора и пароля");
             }
-            
+
+            if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+            {
+                return BadRequest("Нельзя создать учётную запись с пустыми идентификатором и паролем");
+            }
+            if (username.Length > 64 || password.Length > 32)
+            {
+                return BadRequest("Превышено количество символов в логине или пароле");
+            }
+
             string id = Guid.NewGuid().ToString();
             byte[] salt = CreateSalt();
             byte[] hash = await HashPassword(password, id, salt);
 
-            string stringScopes = "username surname name lastname email gender";
-            string integerScopes = "phone";
-
-            List<Claim> claims = new()
-            {
-                new Claim(ClaimTypes.SerialNumber, id, ClaimValueTypes.String, _issuer)
-            };
             foreach(var formKey in form.Keys)
             {
-                if (string.IsNullOrEmpty(formKey)) continue;
-                string claimTypeValue;
-                if (stringScopes.Contains(formKey))
-                {
-                    claimTypeValue = ClaimValueTypes.String;
-                }
-                else if (integerScopes.Contains(formKey))
-                {
-                    claimTypeValue = ClaimValueTypes.UInteger64;
-                }
-                else
+                if (string.IsNullOrEmpty(formKey))
                 {
                     continue;
                 }
-                string claimType = formKey switch
+                string claimTypeValue = ScopeHelper.GetClaimValueType(formKey);
+                if (string.IsNullOrEmpty(claimTypeValue))
                 {
-                    "username" => ClaimTypes.Upn,
-                    "surname" => ClaimTypes.Surname,
-                    "name" => ClaimTypes.Name,
-                    "email" => ClaimTypes.Email,
-                    "gender" => ClaimTypes.Gender,
-                    "phone" => ClaimTypes.MobilePhone,
-                    _ => formKey
-                };
-                Claim claim = new(claimType, form[formKey].First() ?? "", claimTypeValue, _issuer);
-                claims.Add(claim);
+                    continue;
+                }
+                var value = form[formKey].First();
+                if (string.IsNullOrEmpty(value))
+                {
+                    continue;
+                }
+                if (value.Length > 128)
+                {
+                    throw new Exception("Превышение ограничения символов для атрибута");
+                }
             }
-            ClaimsIdentity identity = new(claims);
-            Account account = new(identity, Convert.ToBase64String(hash), Convert.ToBase64String(salt), false, 0);
+
+            User user = new(id,
+                form["surname"].First(),
+                form["name"].First(),
+                form["lastname"].First(),
+                form["email"].First(),
+                ulong.Parse(form["phone"].First() ?? "0"),
+                form["gender"].First());
+            Account account = new(id, username, hash, salt, false, 0, "user", DateTime.MaxValue);
 
             string keyId = Guid.NewGuid().ToString();
-            string payload = _kvService.CreateKey(keyId);
-            var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-            string client = ((Client?)HttpContext.Items["client"])!.Name ?? "";
+            byte[] payload = _kvService.CreateKey(keyId);
+            var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
 
-            if (await _database.CreateAccount(account))
-            {
-                foreach(string item in "user reset delete".Split(" "))
-                {
-                    var res = await _database.CreateAccept(id, (HttpContext.Items["client"] as Client)?.Name ?? "", item);
-                }
-                
-                if (await _database.CreateAuthKey(key.KeyId, _audience, id))
-                {
-                    var result = new
-                    {
-                        id_token = CreateIdToken(account.Identity.Claims, key, client),
-                        refresh_token = CreateRefreshToken(id, key, client)
-                    };
-                    return Ok(result);
-                }
-                return Accepted();
-            }
-            else
+            string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
+
+            if (!await db.CreateIdentity(account, user))
             {
                 return Problem("Не удалось зарегистрировать пользователя");
             }
+            if (!await db.CreateAccept(id, client, "user reset delete"))
+            {
+                return Problem("Не удалось присвоить основные разрешения на управление учётной записью пользователя");
+            }
+            if (await db.CreateAuthKey(key.KeyId, authNames.Audience, id))
+            {
+                var result = new
+                {
+                    refresh_token = CreateRefreshToken(id, key, client)
+                };
+                return Ok(result);
+            }
+            return Accepted();
         }
         [Client]
-        [AllowAnonymous]
-        [HttpPost("token")]
-        public async Task<ActionResult> CreateToken([FromForm] string? scope, [FromForm] string code, [FromForm] string verifier)
-        {
-            Client? client = (Client?)HttpContext.Items["client"];
-            if (client == null)
-            {
-                return BadRequest("Невозможно получить данные о клиентском приложении");
-            }
-            Request? request = await _database.GetRequestByCode(code);
-            if (request != null)
-            {
-                byte[] hashVerifier = HashCode(verifier);
-                if (IsHashCodeValid(hashVerifier, Encoding.UTF8.GetBytes(request.Verifier)))
-                {
-                    string keyId = Guid.NewGuid().ToString();
-                    string payload = _kvService.CreateKey(keyId);
-                    var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                    if (!await _database.CreateAuthKey(key.KeyId, _audience, request.User))
-                    {
-                        return Problem("Новый ключ подписи не создан в базе данных");
-                    }
-
-                    StringBuilder validScopes = new();
-                    List<string> acceptedScopes = await _database.GetAccepts(request.User, client.Name ?? "");
-                    if (!string.IsNullOrEmpty(scope))
-                    {
-                        validScopes.AppendJoin(" ", client.Scopes.Intersect(acceptedScopes).Intersect(scope.Split(" ")));
-                    }
-                    else
-                    {
-                        validScopes.AppendJoin(" ", client.Scopes.Intersect(acceptedScopes));
-                    }
-
-                    string access = CreateAccessToken(request.User, key, validScopes.ToString(), client.Name ?? "");
-                    string refresh = CreateRefreshToken(request.User, key, client.Name ?? "");
-                    var result = new
-                    {
-                        access_token = access,
-                        refresh_token = refresh
-                    };
-                    return Ok(result);
-                }
-                else
-                {
-                    return BadRequest("Запрос не авторизован системой");
-                }
-            }
-            else
-            {
-                return BadRequest("Неправильный запрос");
-            }
-        }
-        [Client]
-        [HttpPost("token/refresh")]
-        public async Task<ActionResult> GetToken([FromForm] string scope)
+        [HttpGet("token/access")]
+        public async Task<ActionResult> GetAccessToken()
         {
             var auth = await HttpContext.AuthenticateAsync();
             var tokenScope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
@@ -274,53 +208,69 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Представленный токен не предназначен для доступа к этому ресурсу");
             }
-            var token = auth.Properties?.GetTokens().First().Value;
-            var handler = new JwtSecurityTokenHandler();
-            var kid = handler.ReadJwtToken(token).Header.Kid;
-            if (await _database.IsKeyValid(kid))
-            {
-                if (!_kvService.DeleteKey(kid))
-                {
-                    return Problem("Хранилище секретов не удалило ключ");
-                }
-                if (!await _database.DeleteAuthKey(kid))
-                {
-                    return Problem("База данных не удалила идентификатор ключа");
-                }
-                Client? client = (Client?)HttpContext.Items["client"];
-                string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                string keyId = Guid.NewGuid().ToString();
-                string payload = _kvService.CreateKey(keyId);
-                var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                if (!await _database.CreateAuthKey(key.KeyId, _audience, user))
-                {
-                    return Problem("Новый ключ подписи не создан в базе данных");
-                }
+            string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
+            
+            string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
 
-                StringBuilder validScopes = new();
-                List<string> acceptedScopes = await _database.GetAccepts(user, client?.Name ?? "");
-                if (!string.IsNullOrEmpty(scope))
-                {
-                    validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes).Intersect(scope.Split(" ")));
-                }
-                else
-                {
-                    validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes));
-                }
-
-                string access = CreateAccessToken(user, key, validScopes.ToString(), client.Name ?? "");
-                string refresh = CreateRefreshToken(user, key, client.Name ?? "");
-                var result = new
-                {
-                    access_token = access,
-                    refresh_token = refresh
-                };
-                return Ok(result);
-            }
-            else
+            string keyId = Guid.NewGuid().ToString();
+            byte[] payload = _kvService.CreateKey(keyId);
+            var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
+            if (!await db.CreateAuthKey(key.KeyId, authNames.Audience, user))
             {
-                return Unauthorized();
+                return Problem("Новый ключ подписи не создан в базе данных");
             }
+
+            StringBuilder validScopes = new();
+            List<string> acceptedScopes = await db.GetAccepts(user, client);
+            validScopes.AppendJoin(" ", acceptedScopes);
+
+            var result = new
+            {
+                access_token = CreateAccessToken(user, key, validScopes.ToString(), client),
+                refresh_token = CreateRefreshToken(user, key, client)
+            };
+            return Ok(result);
+        }
+        [Client]
+        [AllowAnonymous]
+        [HttpPost("token")]
+        public async Task<ActionResult> CreateToken([FromForm] string code, [FromForm] string verifier)
+        {
+            string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
+            
+            Request? request = await db.GetRequestByCode(code);
+            if (request == null)
+            {
+                return BadRequest("Запрос не найден в базе данных");
+            }
+            byte[] hashVerifier = HashCode(verifier);
+            if (!IsHashValid(hashVerifier, Encoding.UTF8.GetBytes(request.Verifier)))
+            {
+                return BadRequest("Запрос не авторизован");
+            }
+            if (!await db.DeleteRequest(code))
+            {
+                return Problem("Авторизационный код не удалён в базе данных");
+            }
+
+            string keyId = Guid.NewGuid().ToString();
+            byte[] payload = _kvService.CreateKey(keyId);
+            var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
+            if (!await db.CreateAuthKey(key.KeyId, authNames.Audience, request.User))
+            {
+                return Problem("Новый ключ подписи не создан в базе данных");
+            }
+            
+            StringBuilder validScopes = new();
+            List<string> acceptedScopes = await db.GetAccepts(request.User, client);
+            validScopes.AppendJoin(" ", acceptedScopes);
+
+            var result = new
+            {
+                access_token = CreateAccessToken(request.User, key, validScopes.ToString(), client),
+                refresh_token = CreateRefreshToken(request.User, key, client)
+            };
+            return Ok(result);
         }
         [TrustClient]
         [HttpGet("token/reset")]
@@ -335,43 +285,38 @@ namespace NAuthAPI.Controllers
             var token = auth.Properties?.GetTokens().First().Value;
             var handler = new JwtSecurityTokenHandler();
             var kid = handler.ReadJwtToken(token).Header.Kid;
-            if (await _database.IsKeyValid(kid))
-            {
-                if (!_kvService.DeleteKey(kid))
-                {
-                    return Problem("Хранилище секретов не удалило ключ");
-                }
-                if (!await _database.DeleteAuthKey(kid))
-                {
-                    return Problem("База данных не удалила идентификатор ключа");
-                }
-                Client? client = (Client?)HttpContext.Items["client"];
-                string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                string keyId = Guid.NewGuid().ToString();
-                string payload = _kvService.CreateKey(keyId);
-                var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                if (!await _database.CreateAuthKey(key.KeyId, _audience, user))
-                {
-                    return Problem("Новый ключ подписи не создан в базе данных");
-                }
-
-                StringBuilder validScopes = new();
-                List<string> acceptedScopes = await _database.GetAccepts(user, client?.Name ?? "");
-                validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes).Intersect("reset".Split(" ")));
-
-                string access = CreateAccessToken(user, key, validScopes.ToString(), client.Name ?? "");
-                string refresh = CreateRefreshToken(user, key, client.Name ?? "");
-                var result = new
-                {
-                    access_token = access,
-                    refresh_token = refresh
-                };
-                return Ok(result);
-            }
-            else
+            if (!await db.IsKeyValid(kid))
             {
                 return Unauthorized();
             }
+            if (!_kvService.DeleteKey(kid))
+            {
+                return Problem("Хранилище секретов не удалило ключ");
+            }
+            if (!await db.DeleteAuthKey(kid))
+            {
+                return Problem("База данных не удалила идентификатор ключа");
+            }
+            string? client = (string?)HttpContext.Items["client"] ?? string.Empty;
+            string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+            string keyId = Guid.NewGuid().ToString();
+            byte[] payload = _kvService.CreateKey(keyId);
+            var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
+            if (!await db.CreateAuthKey(key.KeyId, authNames.Audience, user))
+            {
+                return Problem("Новый ключ подписи не создан в базе данных");
+            }
+
+            StringBuilder validScopes = new();
+            List<string> acceptedScopes = await db.GetAccepts(user, client);
+            validScopes.AppendJoin(" ", acceptedScopes.Intersect(["reset"]));
+
+            var result = new
+            {
+                access_token = CreateAccessToken(user, key, validScopes.ToString(), client),
+                refresh_token = CreateRefreshToken(user, key, client)
+            };
+            return Ok(result);
         }
         [TrustClient]
         [HttpGet("token/accept")]
@@ -386,49 +331,44 @@ namespace NAuthAPI.Controllers
             var token = auth.Properties?.GetTokens().First().Value;
             var handler = new JwtSecurityTokenHandler();
             var kid = handler.ReadJwtToken(token).Header.Kid;
-            if (await _database.IsKeyValid(kid))
-            {
-                if (!_kvService.DeleteKey(kid))
-                {
-                    return Problem("Хранилище секретов не удалило ключ");
-                }
-                if (!await _database.DeleteAuthKey(kid))
-                {
-                    return Problem("База данных не удалила идентификатор ключа");
-                }
-                Client? client = (Client?)HttpContext.Items["client"];
-                string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-                string keyId = Guid.NewGuid().ToString();
-                string payload = _kvService.CreateKey(keyId);
-                var key = new SymmetricSecurityKey(Convert.FromBase64String(payload)) { KeyId = keyId };
-                if (!await _database.CreateAuthKey(key.KeyId, _audience, user))
-                {
-                    return Problem("Новый ключ подписи не создан в базе данных");
-                }
-
-                StringBuilder validScopes = new();
-                List<string> acceptedScopes = await _database.GetAccepts(user, client?.Name ?? "");
-                validScopes.AppendJoin(" ", client!.Scopes.Intersect(acceptedScopes).Intersect("accept".Split(" ")));
-
-                string access = CreateAccessToken(user, key, validScopes.ToString(), client.Name ?? "");
-                string refresh = CreateRefreshToken(user, key, client.Name ?? "");
-                var result = new
-                {
-                    access_token = access,
-                    refresh_token = refresh
-                };
-                return Ok(result);
-            }
-            else
+            if (!await db.IsKeyValid(kid))
             {
                 return Unauthorized();
             }
+            if (!_kvService.DeleteKey(kid))
+            {
+                return Problem("Хранилище секретов не удалило ключ");
+            }
+            if (!await db.DeleteAuthKey(kid))
+            {
+                return Problem("База данных не удалила идентификатор ключа");
+            }
+            string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
+            string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+            string keyId = Guid.NewGuid().ToString();
+            byte[] payload = _kvService.CreateKey(keyId);
+            var securityKey = new SymmetricSecurityKey(payload) { KeyId = keyId };
+            if (!await db.CreateAuthKey(keyId, authNames.Audience, user))
+            {
+                return Problem("Новый ключ подписи не создан в базе данных");
+            }
+
+            StringBuilder validScopes = new();
+            List<string> acceptedScopes = await db.GetAccepts(user, client);
+            validScopes.AppendJoin(" ", acceptedScopes.Intersect(["accept"]));
+
+            var result = new
+            {
+                access_token = CreateAccessToken(user, securityKey, validScopes.ToString(), client),
+                refresh_token = CreateRefreshToken(user, securityKey, client)
+            };
+            return Ok(result);
         }
         [TrustClient]
         [HttpPost("flow")]
-        public async Task<ActionResult> CreateAuthorizationFlow([FromForm] string code_verifier, [FromForm] string secret, [FromForm] string scope, [FromForm] string client, [FromForm] string user)
+        public async Task<ActionResult> CreateAuthorizationFlow([FromForm] string code_verifier, [FromForm] string scope, [FromForm] string client)
         {
-            if (!await Client.Authenticate(_database, client, secret))
+            if (!await ClientValidator.IsValidClient(db, client))
             {
                 return BadRequest("Клиентское приложение не авторизовано");
             }
@@ -437,12 +377,16 @@ namespace NAuthAPI.Controllers
                 Client = client,
                 Scope = scope,
                 Code = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64)),
-                Verifier = code_verifier,
-                User = user
+                User = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "",
+                Verifier = code_verifier
             };
-            if (await _database.CreateRequest(request))
+            if (await db.CreateRequest(request))
             {
-                return Accepted();
+                var result = new
+                {
+                    code = request.Code
+                };
+                return Ok(result);
             }
             else
             {
@@ -464,9 +408,9 @@ namespace NAuthAPI.Controllers
             var kid = handler.ReadJwtToken(token).Header.Kid;
             if (!_kvService.DeleteKey(kid))
             {
-                return Problem("Ключ подписи не удалён из озера ключей");
+                return Problem("Ключ подписи не удалён из хранилища ключей");
             }
-            if (!await _database.DeleteAuthKey(kid))
+            if (!await db.DeleteAuthKey(kid))
             {
                 return Problem("Идентификатор ключа подписи не удалён из базы данных");
             }
@@ -474,7 +418,7 @@ namespace NAuthAPI.Controllers
         }
         [TrustClient]
         [HttpGet("accept")]
-        public async Task<ActionResult> AcceptData([FromQuery] string issuer, [FromQuery] string scope)
+        public async Task<ActionResult> AcceptScope([FromQuery] string client, [FromQuery] string scope)
         {
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
             string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
@@ -482,30 +426,25 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
+
             string user_id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             if (string.IsNullOrEmpty(user_id))
             {
                 return BadRequest("Токен не содержит идентификационную информацию");
             }
-            try
+
+            if (await db.CreateAccept(user_id, client, scope))
             {
-                if (await _database.CreateAccept(user_id, issuer, scope))
-                {
-                    return Ok();
-                }
-                else
-                {
-                    return Problem();
-                }
+                return Accepted();
             }
-            catch (Exception)
+            else
             {
-                return Problem();
+                return Problem("Фиксация разрешения в базе данных не произошла");
             }
         }
         [TrustClient]
-        [HttpGet("revoke")]
-        public async Task<ActionResult> RevokeData([FromQuery] string issuer, [FromQuery] string? scope)
+        [HttpDelete("accept")]
+        public async Task<ActionResult> RevokeScope([FromQuery] string client, [FromQuery] string scope)
         {
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
             string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
@@ -513,8 +452,8 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
-            string user_id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-            if (string.IsNullOrEmpty(user_id))
+            string user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
+            if (string.IsNullOrEmpty(user))
             {
                 return BadRequest("Токен не содержит идентификационную информацию");
             }
@@ -522,14 +461,14 @@ namespace NAuthAPI.Controllers
             {
                 if (string.IsNullOrEmpty(scope))
                 {
-                    if (await _database.DeleteAccept(user_id, issuer))
+                    if (await db.DeleteAccept(user, client))
                     {
                         return Ok();
                     }
                 }
                 else
                 {
-                    if (await _database.DeleteAccept(user_id, issuer, scope))
+                    if (await db.DeleteAccept(user, client, scope))
                     {
                         return Ok();
                     }
@@ -559,10 +498,13 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Нет идентификационной информации в токене");
             } 
 
-            var keys = await _database.GetUserKeys(id);
+            var keys = await db.GetUserKeys(id);
             foreach (var key in keys)
+            {
                 _kvService.DeleteKey(key);
-            if (await _database.DeleteUserAuthKeys(id))
+            }
+
+            if (await db.DeleteUserAuthKeys(id))
             {
                 return Ok();
             }
@@ -590,7 +532,7 @@ namespace NAuthAPI.Controllers
 
             byte[] salt = CreateSalt();
             byte[] hash = await HashPassword(password, id, salt);
-            if (await _database.SetPasswordHash(id, Convert.ToBase64String(hash)))
+            if (await db.SetPasswordHash(id, hash))
             {
                 return Ok();
             }
@@ -599,15 +541,12 @@ namespace NAuthAPI.Controllers
                 return Problem("Не удалось сбросить пароль");
             }
         }
-        
+
         #endregion
 
         #region Private Logic
 
-        private static byte[] CreateSalt()
-        {
-            return CreateRandBytes(32);
-        }
+        private static byte[] CreateSalt() => CreateRandBytes(32);
         private static byte[] CreateRandBytes(int bytes)
         {
             var buffer = new byte[bytes];
@@ -631,49 +570,39 @@ namespace NAuthAPI.Controllers
 
             argon2.Dispose();
             argon2.Reset();
-            //argon2 = null;//Releases memmory (without leak)
+            //argon2 = null;//Correct releasing memmory 
             GC.Collect();
 
             return hash;
         }
-        private static byte[] HashCode(string code)
-        {
-            return SHA256.HashData(Encoding.UTF8.GetBytes(code));
-        }
-        private static bool IsHashCodeValid(byte[] actual, byte[] expected)
-        {
-            return expected.SequenceEqual(actual);
-        }
-        private static bool IsHashValid(byte[] hash, string db_hash) => hash.SequenceEqual(Convert.FromBase64String(db_hash));
-        private string CreateIdToken(IEnumerable<Claim> claims, SymmetricSecurityKey key, string audience)
-        {
-            _ = claims.Append(new Claim("scope", "id", ClaimValueTypes.String, _issuer));
-            var token = CreateToken(claims, key, TimeSpan.FromHours(10), audience);
-            return token;
-        }
+
+        private static byte[] HashCode(string code) => SHA256.HashData(Encoding.UTF8.GetBytes(code));
+        private static bool IsHashValid(byte[] actual, byte[] expected) => expected.SequenceEqual(actual);
+        
         private string CreateRefreshToken(string guid, SymmetricSecurityKey key, string audience)
         {
             var claims = new List<Claim>() { 
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
-                new Claim("scope", "refresh accept", ClaimValueTypes.String, _issuer)
+                new(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, authNames.Issuer),
+                new("scope", "refresh", ClaimValueTypes.String, authNames.Issuer)
             };
-            var token = CreateToken(claims, key, TimeSpan.FromDays(14), audience);
+            var token = CreateToken(claims, key, TimeSpan.FromDays(7), audience);
             return token;
         }
         private string CreateAccessToken(string guid, SymmetricSecurityKey key, string scope, string audience)
         {
             var claims = new List<Claim>() {
-                new Claim(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, _issuer),
-                new Claim("scope", scope, ClaimValueTypes.String, _issuer)
+                new(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, authNames.Issuer),
+                new("scope", scope, ClaimValueTypes.String, authNames.Issuer)
             };
-            var token = CreateToken(claims, key, TimeSpan.FromHours(1), audience);
+            var token = CreateToken(claims, key, TimeSpan.FromMinutes(10), audience);
             return token;
         }
+
         private string CreateToken(IEnumerable<Claim> claims, SymmetricSecurityKey key, TimeSpan lifetime, string audience)
         {
             var now = DateTime.UtcNow;
             var jwt = new JwtSecurityToken(
-                _issuer,
+                authNames.Issuer,
                 audience,
                 claims,
                 now,

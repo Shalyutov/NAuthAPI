@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using System.Reflection.Metadata.Ecma335;
 using System.Security.Claims;
 
 namespace NAuthAPI.Controllers
@@ -9,16 +10,9 @@ namespace NAuthAPI.Controllers
     [Authorize]
     [Route("user")]
     [ApiController]
-    public class UserController : ControllerBase
+    public class UserController(AppContext db, IKVEngine kvService) : ControllerBase
     {
-        readonly AppContext _database;
-        readonly IKVEngine _kvService;
-
-        public UserController(AppContext db, IKVEngine kvService)
-        {
-            _database = db;
-            _kvService = kvService;
-        }
+        readonly IKVEngine _kvService = kvService;
 
         #region Endpoints Logic
 
@@ -28,29 +22,36 @@ namespace NAuthAPI.Controllers
         {
             string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             string scope = HttpContext.User.FindFirst("scope")?.Value ?? "";
-            Account? account = await _database.GetAccountById(id);
-            if (account != null)
+            User? user = await db.GetUser(id);
+            if (user != null)
             {
-                Dictionary<string, string> claims = new();
-                foreach (var claim in account.Identity.Claims)
+                Dictionary<string, object> claims = [];
+                foreach (var claim in ScopeHelper.Scopes)
                 {
-                    string type = claim.Type switch
+                    if (!string.IsNullOrEmpty(claim))
                     {
-                        ClaimTypes.Upn => "username",
-                        ClaimTypes.Surname => "surname",
-                        ClaimTypes.Name => "name",
-                        ClaimTypes.Email => "email",
-                        ClaimTypes.MobilePhone => "phone",
-                        ClaimTypes.Gender => "gender",
-                        ClaimTypes.SerialNumber => "guid",
-                        _ => claim.Type
-                    };
-                    if (scope.Contains("user") ||
-                        scope.Contains($"user:{type}") ||
-                        scope.Contains($"user:{type}:get"))
-                    {
-                        claims.Add(type, claim.Value);
+                        string? value = claim switch
+                        {
+                            "lastname" => user.LastName,
+                            "surname" => user.Surname,
+                            "name" => user.Name,
+                            ClaimTypes.Email => "email",
+                            ClaimTypes.MobilePhone => "phone",
+                            ClaimTypes.Gender => "gender",
+                            ClaimTypes.SerialNumber => "guid",
+                            _ => null
+                        };
+                        if (scope.Contains("user") ||
+                            scope.Contains($"user:{claim}") ||
+                            scope.Contains($"user:{claim}:get"))
+                        {
+                            if (!string.IsNullOrEmpty(value))
+                            {
+                                claims.Add(claim, value);
+                            }
+                        }
                     }
+                    
                 }
                 return Ok(claims);
             }
@@ -67,7 +68,7 @@ namespace NAuthAPI.Controllers
             var validScopes = (HttpContext.User.FindFirst("scope")?.Value ?? "").Split(" ");
             var requiredScopes = scopes.Split(" ");
 
-            var data = await _database.GetClaims(validScopes.Intersect(requiredScopes), id);
+            var data = await db.GetClaims(validScopes.Intersect(requiredScopes), id);
             if (data.Count > 0)
             {
                 return Ok(data);
@@ -97,10 +98,10 @@ namespace NAuthAPI.Controllers
             var user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
             if (user != null)
             {
-                Dictionary<string, string> claims = new();
+                Dictionary<string, string> claims = [];
                 foreach (var item in form) claims.Add(item.Key, item.Value.First() ?? "");
 
-                var result = await _database.UpdateAccount(user, claims);
+                var result = await db.UpdateUser(user, claims);
                 if (result)
                 {
                     return Ok();
@@ -127,16 +128,16 @@ namespace NAuthAPI.Controllers
                 
             var id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             
-            var keys = await _database.GetUserKeys(id);
+            var keys = await db.GetUserKeys(id);
             foreach (var key in keys)
                 _kvService.DeleteKey(key);
-            await _database.DeleteUserAuthKeys(id);
+            await db.DeleteUserAuthKeys(id);
             foreach (string item in "user sign reset delete".Split(" "))
             {
-                await _database.DeleteAccept(id, (HttpContext.Items["client"] as Client)?.Name ?? "", item);
+                await db.DeleteAccept(id, (HttpContext.Items["client"] as Client)?.Name ?? "", item);
             }
 
-            if (await _database.DeleteAccount(id))
+            if (await db.DeleteAccount(id))
             {
                 return Ok();
             }
@@ -150,7 +151,7 @@ namespace NAuthAPI.Controllers
         [HttpGet("account/exists")]
         public async Task<ActionResult> IsUserExists([FromQuery] string username)
         {
-            bool? exist = await _database.IsUsernameExists(username);
+            bool? exist = await db.IsUsernameExists(username);
             if (exist == null)
             {
                 return NoContent();
@@ -165,7 +166,7 @@ namespace NAuthAPI.Controllers
         public async Task<ActionResult> UserTokens()
         {
             string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
-            var keys = await _database.GetUserKeys(user);
+            var keys = await db.GetUserKeys(user);
             return Ok(keys);
         }
 

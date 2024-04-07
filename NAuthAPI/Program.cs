@@ -15,9 +15,10 @@ using Ydb.Sdk.Yc;
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
 
-string keypath = builder.Configuration["AuthKey"] ?? "";
-string endpoint = builder.Configuration["Endpoint"] ?? "";
-string databasePath = builder.Configuration["Database"] ?? "";
+string? key = builder.Configuration["AuthKey"];
+string endpoint = builder.Configuration["Endpoint"] ?? throw new Exception("Настройки должны содержать эндпоинт базы данных");
+string databasePath = builder.Configuration["Database"] ?? throw new Exception("Настройки должны содержать путь до базы данных");
+string stage = builder.Environment.EnvironmentName;
 
 AuthNames names = new()
 {
@@ -25,26 +26,25 @@ AuthNames names = new()
     Audience = builder.Configuration["Audience"] ?? "NAuth App"
 };
 
-string lake_auth = builder.Configuration["KeyLakeAuth"] ?? "";
-string vault_auth = builder.Configuration["VaultAuth"] ?? "";
-string kv_address = builder.Configuration["KVAddress"] ?? "";
+string? vault_auth = builder.Configuration["VaultAuth"];
+string? kv_address = builder.Configuration["KVAddress"];
 
 ICredentialsProvider provider;
 Driver? driver = null;
 TableClient? tableClient = null;
-NAuthAPI.AppContext? _database = null;
+NAuthAPI.AppContext? database = null;
 
-if (keypath != "") //Используем авторизованный ключ доступа если он задан в настройках приложения
+if (!string.IsNullOrEmpty(key)) //Используем авторизованный ключ доступа если он задан
 {
-    provider = new ServiceAccountProvider(keypath);
+    provider = new ServiceAccountProvider(key);
     await ((ServiceAccountProvider)provider).Initialize();
 }
 else
 {
-    provider = new AnonymousProvider(); //анонимная аутентификация по умолчанию если не задан ключ
+    provider = new AnonymousProvider(); //анонимная аутентификация по умолчанию 
 }
 
-for(int i = 0; i < 6; i++)//retry connect //переподключение
+for(int i = 0; i < 10; i++) //переподключение
 {
     try
     {
@@ -62,7 +62,7 @@ for(int i = 0; i < 6; i++)//retry connect //переподключение
 if (driver != null)
 {
     tableClient = new TableClient(driver, new TableClientConfig());
-    _database = new NAuthAPI.AppContext(tableClient, names.Issuer);
+    database = new NAuthAPI.AppContext(tableClient, stage, databasePath);
 }
 else
 {
@@ -70,12 +70,7 @@ else
 }
 
 IKVEngine kvService;
-if (!string.IsNullOrEmpty(lake_auth))
-{
-    var iam = File.ReadAllBytes(lake_auth);
-    kvService = new KeyLakeService(new HttpClient(), kv_address, names.Issuer, "KeyLake", iam);
-}
-else if (!string.IsNullOrEmpty(vault_auth))
+if (!string.IsNullOrEmpty(vault_auth) && !string.IsNullOrEmpty(kv_address))
 {
     kvService = new VaultService(kv_address, vault_auth);
 }
@@ -100,7 +95,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                     foreach(var a in aud)
                     {
                         count++;
-                        Client? client = _database.GetClient(a).Result;
+                        Client? client = database.GetClient(a).Result;
                         if (client != null)
                         {
                             if (client.IsValid) valid++;
@@ -111,14 +106,14 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKeyValidator = (key, token, param) => {
-                    return _database.IsKeyValid(key.KeyId).Result;
+                    return database.IsKeyValid(key.KeyId).Result;
                 },
                 IssuerSigningKeyResolver = (token, secToken, kid, param) => {
                     var list = new List<SecurityKey>();
                     try
                     {
                         var payload = kvService.GetKey(kid);
-                        var key = new SymmetricSecurityKey(Convert.FromBase64String(payload))
+                        var key = new SymmetricSecurityKey(payload)
                         {
                             KeyId = kid
                         };
@@ -131,7 +126,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         });
 builder.Services.AddAuthorization();
 builder.Services.AddHttpClient();
-builder.Services.AddSingleton(_database);
+builder.Services.AddSingleton(database);
 builder.Services.AddSingleton(kvService);
 builder.Services.AddSingleton(names);
 

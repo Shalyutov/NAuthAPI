@@ -17,10 +17,10 @@ namespace NAuthAPI
             client = new VaultClient(config);
             client.SetToken(token);
         }
-        public string CreateKey(string key)
+        public byte[] CreateKey(string key)
         {
-            string payload = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
-            var secretData = new Dictionary<string, string> { { "key", payload } };
+            byte[] payload = RandomNumberGenerator.GetBytes(32);
+            var secretData = new Dictionary<string, byte[]> { { "key", payload } };
             var kvRequestData = new KvV2WriteRequest(secretData);
             client.Secrets.KvV2Write(key, kvRequestData, "kv");
             return payload;
@@ -32,11 +32,11 @@ namespace NAuthAPI
             return resp.Data != null;
         }
 
-        public string GetKey(string key)
+        public byte[] GetKey(string key)
         {
             VaultResponse<KvV2ReadResponse> resp = client.Secrets.KvV2Read($"{key}", "kv");
             var res = JObject.Parse(resp.Data.ToJson());
-            return (string)res["data"]!["key"]!;
+            return (byte[])res["data"]!["key"]!;
         }
         public string GetPepper()
         {

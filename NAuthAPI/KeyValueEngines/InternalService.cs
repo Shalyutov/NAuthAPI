@@ -9,11 +9,11 @@ namespace NAuthAPI
         {
             if (!Directory.Exists("keys")) Directory.CreateDirectory("keys");
         }
-        public string CreateKey(string key)
+        public byte[] CreateKey(string key)
         {
             byte[] payload = RandomNumberGenerator.GetBytes(32);
             File.WriteAllBytes($"keys/{key}.key", payload);
-            return Convert.ToBase64String(payload);
+            return payload;
         }
 
         public bool DeleteKey(string key)
@@ -22,15 +22,15 @@ namespace NAuthAPI
             return true;
         }
 
-        public string GetKey(string key)
+        public byte[] GetKey(string key)
         {
             byte[] payload = File.ReadAllBytes($"keys/{key}.key");
-            return Convert.ToBase64String(payload);
+            return payload;
         }
 
         public string GetPepper()
         {
-            return "AMdjr86#675y=kdfnfg";
+            return "Ppdofiiennhuvygdfg29598efgj]{hijuhufrg--*+54575(*&^*^%";
         }
     }
 }

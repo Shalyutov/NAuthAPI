@@ -4,13 +4,8 @@ namespace NAuthAPI.Controllers
 {
     [Route("/")]
     [ApiController]
-    public class HomeController : ControllerBase
+    public class HomeController(AppContext db) : ControllerBase
     {
-        readonly private AppContext _db;
-        public HomeController(AppContext db)
-        {
-            _db = db;
-        }
         public IActionResult Index()
         {
             return Ok("NAuth Federation");
@@ -18,12 +13,12 @@ namespace NAuthAPI.Controllers
         [HttpGet("version")]
         public IActionResult Version()
         {
-            return Ok("0.0.4");
+            return Ok("0.2.0");
         }
         [HttpGet("health")]
         public ActionResult DatabaseStatus()
         {
-            if (_db == null)
+            if (db == null)
                 return Problem("Драйвер базы данных не инициализирован");
             else
                 return Ok("Драйвер базы данных успешно запущен");
