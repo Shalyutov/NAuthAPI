@@ -34,11 +34,12 @@ namespace NAuthAPI.Controllers
     [Authorize]
     [Route("auth")]
     [ApiController]
-    public class AuthController(AuthNames names, AppContext db, IKVEngine kvService) : ControllerBase
+    public class AuthController(IConfiguration configuration, IAppContext db, IKVEngine kvService) : ControllerBase
     {
         readonly IKVEngine _kvService = kvService;
         readonly string _pepper = kvService.GetPepper();
-        readonly AuthNames authNames = names;
+        readonly string issuer = configuration["Issuer"] ?? "NAuth API";
+        readonly string audience = configuration["Audience"] ?? "NAuth App";
 
         #region Endpoints Logic
 
@@ -93,7 +94,7 @@ namespace NAuthAPI.Controllers
             byte[] payload = _kvService.CreateKey(keyId);
             var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
             string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
-            if (await db.CreateAuthKey(keyId, authNames.Audience, account.Id))
+            if (await db.CreateAuthKey(keyId, audience, account.Id))
             {
                 var result = new
                 {
@@ -188,7 +189,7 @@ namespace NAuthAPI.Controllers
             {
                 return Problem("Не удалось присвоить основные разрешения на управление учётной записью пользователя");
             }
-            if (await db.CreateAuthKey(key.KeyId, authNames.Audience, id))
+            if (await db.CreateAuthKey(key.KeyId, audience, id))
             {
                 var result = new
                 {
@@ -215,7 +216,7 @@ namespace NAuthAPI.Controllers
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
             var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
-            if (!await db.CreateAuthKey(key.KeyId, authNames.Audience, user))
+            if (!await db.CreateAuthKey(key.KeyId, audience, user))
             {
                 return Problem("Новый ключ подписи не создан в базе данных");
             }
@@ -256,7 +257,7 @@ namespace NAuthAPI.Controllers
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
             var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
-            if (!await db.CreateAuthKey(key.KeyId, authNames.Audience, request.User))
+            if (!await db.CreateAuthKey(key.KeyId, audience, request.User))
             {
                 return Problem("Новый ключ подписи не создан в базе данных");
             }
@@ -302,7 +303,7 @@ namespace NAuthAPI.Controllers
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
             var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
-            if (!await db.CreateAuthKey(key.KeyId, authNames.Audience, user))
+            if (!await db.CreateAuthKey(key.KeyId, audience, user))
             {
                 return Problem("Новый ключ подписи не создан в базе данных");
             }
@@ -348,7 +349,7 @@ namespace NAuthAPI.Controllers
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
             var securityKey = new SymmetricSecurityKey(payload) { KeyId = keyId };
-            if (!await db.CreateAuthKey(keyId, authNames.Audience, user))
+            if (!await db.CreateAuthKey(keyId, audience, user))
             {
                 return Problem("Новый ключ подписи не создан в базе данных");
             }
@@ -579,11 +580,11 @@ namespace NAuthAPI.Controllers
         private static byte[] HashCode(string code) => SHA256.HashData(Encoding.UTF8.GetBytes(code));
         private static bool IsHashValid(byte[] actual, byte[] expected) => expected.SequenceEqual(actual);
         
-        private string CreateRefreshToken(string guid, SymmetricSecurityKey key, string audience)
+        private string CreateRefreshToken(string id, SymmetricSecurityKey key, string audience)
         {
             var claims = new List<Claim>() { 
-                new(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, authNames.Issuer),
-                new("scope", "refresh", ClaimValueTypes.String, authNames.Issuer)
+                new(ClaimTypes.SerialNumber, id, ClaimValueTypes.String, issuer),
+                new("scope", "refresh", ClaimValueTypes.String, issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromDays(7), audience);
             return token;
@@ -591,8 +592,8 @@ namespace NAuthAPI.Controllers
         private string CreateAccessToken(string guid, SymmetricSecurityKey key, string scope, string audience)
         {
             var claims = new List<Claim>() {
-                new(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, authNames.Issuer),
-                new("scope", scope, ClaimValueTypes.String, authNames.Issuer)
+                new(ClaimTypes.SerialNumber, guid, ClaimValueTypes.String, issuer),
+                new("scope", scope, ClaimValueTypes.String, issuer)
             };
             var token = CreateToken(claims, key, TimeSpan.FromMinutes(10), audience);
             return token;
@@ -602,7 +603,7 @@ namespace NAuthAPI.Controllers
         {
             var now = DateTime.UtcNow;
             var jwt = new JwtSecurityToken(
-                authNames.Issuer,
+                issuer,
                 audience,
                 claims,
                 now,

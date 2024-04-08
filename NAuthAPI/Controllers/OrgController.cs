@@ -5,13 +5,8 @@ namespace NAuthAPI.Controllers
 {
     [Authorize]
     [Route("org")]
-    public class OrgController : ControllerBase
+    public class OrgController() : ControllerBase
     {
-        private readonly AppContext _database;
-        public OrgController(AppContext db)
-        {
-            _database = db;
-        }
         #region Endpoints Logic
         //TODO Clients
         /*[HttpPost("client")]

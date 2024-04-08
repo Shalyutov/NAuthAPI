@@ -2,7 +2,7 @@
 {
     public class ClientValidator
     {
-        public static async Task<bool> Authenticate(AppContext _database, string client, string secret)
+        public static async Task<bool> Authenticate(IAppContext _database, string client, string secret)
         {
             var _client = await GetClientAsync(_database, client);
             return _client.Secret == secret;
@@ -11,7 +11,7 @@
         {
             return _client.Secret == secret;
         }
-        public static async Task<bool> IsTrustedClient(AppContext _database, string client, string? secret = null)
+        public static async Task<bool> IsTrustedClient(IAppContext _database, string client, string? secret = null)
         {
             Client _client = await GetClientAsync(_database, client);
             if (!string.IsNullOrEmpty(secret))
@@ -23,7 +23,7 @@
             }
             return _client.IsTrusted;
         }
-        public static async Task<bool> IsValidClient(AppContext _database, string client, string? secret = null)
+        public static async Task<bool> IsValidClient(IAppContext _database, string client, string? secret = null)
         {
             Client _client = await GetClientAsync(_database, client);
             if (!string.IsNullOrEmpty(secret))
@@ -35,7 +35,7 @@
             }
             return _client.IsValid;
         }
-        public static async Task<bool> IsTrustedValidClient(AppContext _database, string client, string? secret = null)
+        public static async Task<bool> IsTrustedValidClient(IAppContext _database, string client, string? secret = null)
         {
             Client _client = await GetClientAsync(_database, client);
             if (!string.IsNullOrEmpty(secret))
@@ -47,7 +47,7 @@
             }
             return _client.IsTrusted && _client.IsValid;
         }
-        public static async Task<Client> GetClientAsync(AppContext _database, string client)
+        public static async Task<Client> GetClientAsync(IAppContext _database, string client)
         {
             if (string.IsNullOrEmpty(client))
             {

@@ -9,31 +9,26 @@ using System.Threading.Tasks;
 namespace NAuthAPI
 {
     // You may need to install the Microsoft.AspNetCore.Http.Abstractions package into your project
-    public class ClientMiddleware
+    public class ClientMiddleware(RequestDelegate next)
     {
-        private readonly RequestDelegate _next;
+        private readonly RequestDelegate _next = next;
 
-        public ClientMiddleware(RequestDelegate next)
-        {
-            _next = next;
-        }
-
-        public async Task InvokeAsync(HttpContext httpContext, AppContext database)
+        public async Task InvokeAsync(HttpContext httpContext, YDBAppContext database)
         {
             var endpoint = httpContext
                 ?.GetEndpoint()
                 ?.Metadata
                 ?.GetMetadata<ControllerActionDescriptor>();
-            object[] attributes = endpoint?.MethodInfo?.GetCustomAttributes(false) ?? Array.Empty<object>();
+            object[] attributes = endpoint?.MethodInfo?.GetCustomAttributes(false) ?? [];
 
-            string client = httpContext?.Request.Headers["client"].First() ?? string.Empty;
-            string secret = httpContext?.Request.Headers["secret"].First() ?? string.Empty;
+            string? client = httpContext?.Request.Headers["client"].FirstOrDefault();
+            string? secret = httpContext?.Request.Headers["secret"].FirstOrDefault();
 
             foreach (var item in attributes)
             {
                 if (item as TrustClientAttribute != null)
                 {
-                    if (await ClientValidator.IsTrustedValidClient(database, client, secret))
+                    if (await ClientValidator.IsTrustedValidClient(database, client!, secret!))
                     {
                         httpContext?.Items.Add("client", client);
                         break;
@@ -45,7 +40,7 @@ namespace NAuthAPI
                 }
                 else if (item as ClientAttribute != null)
                 {
-                    if (await ClientValidator.IsValidClient(database, client, secret))
+                    if (await ClientValidator.IsValidClient(database, client!, secret!))
                     {
                         httpContext?.Items.Add("client", client);
                         break;

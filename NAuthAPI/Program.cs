@@ -11,6 +11,7 @@ using Ydb.Sdk;
 using Ydb.Sdk.Auth;
 using Ydb.Sdk.Services.Table;
 using Ydb.Sdk.Yc;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
@@ -20,19 +21,16 @@ string endpoint = builder.Configuration["Endpoint"] ?? throw new Exception("Наст
 string databasePath = builder.Configuration["Database"] ?? throw new Exception("Настройки должны содержать путь до базы данных");
 string stage = builder.Environment.EnvironmentName;
 
-AuthNames names = new()
-{
-    Issuer = builder.Configuration["Issuer"] ?? "NAuth API",
-    Audience = builder.Configuration["Audience"] ?? "NAuth App"
-};
+string issuer = builder.Configuration["Issuer"] ?? "NAuth API";
+string audience = builder.Configuration["Audience"] ?? "NAuth App";
 
-string? vault_auth = builder.Configuration["VaultAuth"];
-string? kv_address = builder.Configuration["KVAddress"];
+string? vaultAuth = builder.Configuration["VaultAuth"];
+string? vaultEndpoint = builder.Configuration["VaultEndpoint"];
 
 ICredentialsProvider provider;
 Driver? driver = null;
 TableClient? tableClient = null;
-NAuthAPI.AppContext? database = null;
+YDBAppContext? database = null;
 
 if (!string.IsNullOrEmpty(key)) //Используем авторизованный ключ доступа если он задан
 {
@@ -62,7 +60,7 @@ for(int i = 0; i < 10; i++) //переподключение
 if (driver != null)
 {
     tableClient = new TableClient(driver, new TableClientConfig());
-    database = new NAuthAPI.AppContext(tableClient, stage, databasePath);
+    database = new YDBAppContext(tableClient, stage, databasePath);
 }
 else
 {
@@ -70,9 +68,9 @@ else
 }
 
 IKVEngine kvService;
-if (!string.IsNullOrEmpty(vault_auth) && !string.IsNullOrEmpty(kv_address))
+if (!string.IsNullOrEmpty(vaultAuth) && !string.IsNullOrEmpty(vaultEndpoint))
 {
-    kvService = new VaultService(kv_address, vault_auth);
+    kvService = new VaultService(vaultEndpoint, vaultAuth);
 }
 else
 {
@@ -87,7 +85,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             options.TokenValidationParameters = new TokenValidationParameters()
             {
                 ValidateIssuer = true,
-                ValidIssuer = names.Issuer,
+                ValidIssuer = issuer,
                 ValidateAudience = true,
                 AudienceValidator = (aud, das, vvb) => {
                     int count = 0;
@@ -128,7 +126,9 @@ builder.Services.AddAuthorization();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton(database);
 builder.Services.AddSingleton(kvService);
-builder.Services.AddSingleton(names);
+builder.Services.AddHealthChecks()
+    .AddTypeActivatedCheck<DatabaseHealthCheck>("Database", HealthStatus.Unhealthy, new object[] {database} );
+
 
 var app = builder.Build();
 
@@ -140,5 +140,6 @@ app.UseAuthorization();
 app.UseClientMiddleware();
 
 app.MapControllers();
+app.MapHealthChecks("/health");
 
 app.Run();

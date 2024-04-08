@@ -10,7 +10,7 @@ namespace NAuthAPI.Controllers
     [Authorize]
     [Route("user")]
     [ApiController]
-    public class UserController(AppContext db, IKVEngine kvService) : ControllerBase
+    public class UserController(IAppContext db, IKVEngine kvService) : ControllerBase
     {
         readonly IKVEngine _kvService = kvService;
 
@@ -23,49 +23,58 @@ namespace NAuthAPI.Controllers
             string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
             string scope = HttpContext.User.FindFirst("scope")?.Value ?? "";
             User? user = await db.GetUser(id);
-            if (user != null)
-            {
-                Dictionary<string, object> claims = [];
-                foreach (var claim in ScopeHelper.Scopes)
-                {
-                    if (!string.IsNullOrEmpty(claim))
-                    {
-                        string? value = claim switch
-                        {
-                            "lastname" => user.LastName,
-                            "surname" => user.Surname,
-                            "name" => user.Name,
-                            ClaimTypes.Email => "email",
-                            ClaimTypes.MobilePhone => "phone",
-                            ClaimTypes.Gender => "gender",
-                            ClaimTypes.SerialNumber => "guid",
-                            _ => null
-                        };
-                        if (scope.Contains("user") ||
-                            scope.Contains($"user:{claim}") ||
-                            scope.Contains($"user:{claim}:get"))
-                        {
-                            if (!string.IsNullOrEmpty(value))
-                            {
-                                claims.Add(claim, value);
-                            }
-                        }
-                    }
-                    
-                }
-                return Ok(claims);
-            }
-            else
+            if (user == null)
             {
                 return NoContent();
             }
+
+            if (scope == "user")
+            {
+                return Ok(new
+                {
+                    id,
+                    surname = user.Surname,
+                    name = user.Name,
+                    lastname = user.LastName,
+                    email = user.Email,
+                    phone = user.Phone,
+                    gender = user.Gender,
+                });
+            }
+            Dictionary<string, object> claims = [];
+            foreach (var claim in ScopeHelper.Scopes)
+            {
+                if (string.IsNullOrEmpty(claim))
+                {
+                    continue;
+                }
+                object? value = claim switch
+                {
+                    "surname" => user.Surname,
+                    "name" => user.Name,
+                    "lastname" => user.LastName,
+                    "email" => user.Email,
+                    "phone" => user.Phone,
+                    "gender" => user.Gender,
+                    "id" => id,
+                    _ => null
+                };
+                if (scope.Contains("user") || scope.Contains($"user:{claim}") || scope.Contains($"user:{claim}:get"))
+                {
+                    if (value != null)
+                    {
+                        claims.Add(claim, value);
+                    }
+                }
+            }
+            return Ok(claims);
         }
         [Client]
         [HttpGet("claims")]
-        public async Task<ActionResult> GetClaims([FromForm] string scopes)
+        public async Task<ActionResult> GetClaims([FromQuery] string scopes)
         {
-            string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-            var validScopes = (HttpContext.User.FindFirst("scope")?.Value ?? "").Split(" ");
+            string id = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? throw new Exception("Нет идентификатора пользователя");
+            var validScopes = (HttpContext.User.FindFirstValue("scope") ?? "").Split(" ");
             var requiredScopes = scopes.Split(" ");
 
             var data = await db.GetClaims(validScopes.Intersect(requiredScopes), id);

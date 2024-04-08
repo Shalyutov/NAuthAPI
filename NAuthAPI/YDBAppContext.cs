@@ -13,7 +13,7 @@ using static Yandex.Cloud.Mdb.Clickhouse.V1.Config.ClickhouseConfig.Types.Extern
 
 namespace NAuthAPI
 {
-    public class AppContext(TableClient client, string stage, string path)
+    public class YDBAppContext(TableClient client, string stage, string path) : IAppContext
     {
         private static readonly List<string> validStages = ["Development", "Production", "Test"];
         private readonly string _stage = validStages.Contains(stage) ? stage : throw new Exception("Неопознанная среда выполнения");
