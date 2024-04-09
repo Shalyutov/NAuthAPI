@@ -1,6 +1,6 @@
 ﻿namespace NAuthAPI
 {
-    class Queries
+    class YdbQueries
     {
         public static string CreateAllTables = """
             CREATE TABLE accounts 
@@ -12,88 +12,96 @@
                 attempt Uint8 NOT NULL,
                 blocked Bool NOT NULL,
                 grant Utf8 NOT NULL,
-                access Timestamp,
+                access Timestamp?,
                 PRIMARY KEY (username)
             );
 
             CREATE TABLE requests
             (
                 user Utf8 NOT NULL,
-                verifier Utf8,
-                client Utf8,
-                issued Timestamp,
-                scope Utf8,
+                verifier Utf8 NOT NULL,
+                client Utf8 NOT NULL,
+                issued Timestamp NOT NULL,
+                scope Utf8 NOT NULL,
                 PRIMARY KEY (client, user, verifier)
             );
 
-            CREATE TABLE `accept`
+            CREATE TABLE accepts
             (
-                `client` Utf8 NOT NULL,
-                `scope` Utf8 NOT NULL,
-                `issued` Datetime NOT NULL,
-                `user` Utf8 NOT NULL,
-                PRIMARY KEY (`client`, `scope`, `user`)
+                client Utf8 NOT NULL,
+                scope Utf8 NOT NULL,
+                issued Datetime NOT NULL,
+                user Utf8 NOT NULL,
+                PRIMARY KEY (client, scope, user)
             );
 
-            CREATE TABLE `claims`
+            CREATE TABLE claims
             (
-                `issuer` Utf8 NOT NULL,
-                `type` Utf8 NOT NULL,
-                `user` Utf8 NOT NULL,
-                `value` Utf8 NOT NULL,
-                PRIMARY KEY (`issuer`, `type`, `user`)
+                issuer Utf8 NOT NULL,
+                scope Utf8 NOT NULL,
+                user Utf8 NOT NULL,
+                value Utf8 NOT NULL,
+                PRIMARY KEY (issuer, scope, user)
             );
 
-            CREATE TABLE `clients`
+            CREATE TABLE clients
             (
-                `name` Utf8 NOT NULL,
-                `secret` Utf8 NOT NULL,
-                `scopes` Utf8 NOT NULL,
-                `trust` Bool NOT NULL,
-                `valid` Bool NOT NULL,
-                `callback` Utf8,
-                PRIMARY KEY (`name`)
+                name Utf8 NOT NULL,
+                secret Utf8 NOT NULL,
+                scope Utf8 NOT NULL,
+                trust Bool NOT NULL,
+                valid Bool NOT NULL,
+                callback Utf8?,
+                PRIMARY KEY (name)
             );
 
-            CREATE TABLE `keys`
+            CREATE TABLE keys
             (
-                `id` Utf8 NOT NULL,
-                `audience` Utf8 NOT NULL,
-                `issued` Datetime NOT NULL,
-                `user` Utf8 NOT NULL,
-                PRIMARY KEY (`id`)
+                id Utf8 NOT NULL,
+                audience Utf8 NOT NULL,
+                issued Datetime NOT NULL,
+                user Utf8 NOT NULL,
+                PRIMARY KEY (id)
             );
 
-            CREATE TABLE `scopes`
+            CREATE TABLE scopes
             (
-                `name` Utf8 NOT NULL,
-                `description` Utf8 NOT NULL,
-                `issuer` Utf8 NOT NULL,
-                PRIMARY KEY (`name`, `issuer`)
+                name Utf8 NOT NULL,
+                description Utf8 NOT NULL,
+                issuer Utf8 NOT NULL,
+                PRIMARY KEY (name, issuer)
             );
 
-            CREATE TABLE `users`
+            CREATE TABLE users
             (
-                `id` Utf8 NOT NULL,
-                `email` Utf8,
-                `phone` Uint64,
-                `surname` Utf8,
-                `name` Utf8,
-                `lastname` Utf8,
-                `gender` Utf8,
-                PRIMARY KEY (`id`)
+                id Utf8 NOT NULL,
+                email Utf8?,
+                phone Uint64?,
+                surname Utf8?,
+                name Utf8?,
+                lastname Utf8?,
+                gender Utf8?,
+                PRIMARY KEY (id)
             );
 
-            CREATE TABLE `verify`
+            CREATE TABLE verify
             (
-                `user` Utf8 NOT NULL,
-                `claim` Utf8 NOT NULL,
-                `verifier` Utf8 NOT NULL,
-                `success` Bool,
-                PRIMARY KEY (`user`, `claim`)
+                user Utf8 NOT NULL,
+                claim Utf8 NOT NULL,
+                verifier Utf8 NOT NULL,
+                value Utf8 NOT NULL,
+                success Bool?,
+                PRIMARY KEY (user, claim)
             );
 
-            COMMIT;
+            CREATE TABLE attempts
+            (
+                user Utf8 NOT NULL,
+                issued Timestamp NOT NULL,
+                success Bool NOT NULL,
+                id Utf8 NOT NULL,
+                PRIMARY KEY (id)
+            );
             """;
         public static string DropAllTables = """
             DROP TABLE accept;
@@ -103,26 +111,32 @@
             DROP TABLE scopes;
             DROP TABLE users;
             DROP TABLE requests;
-            """;
-        public static string NullAttempt = """
-            DECLARE $id AS Utf8;
-
-            UPDATE
-                accounts
-            SET
-                attempt = CAST(0 as Uint8)
-            WHERE
-                id = $id;
+            DROP TABLE verify;
+            DROP TABLE accounts;
+            DROP TABLE attempts;
             """;
         public static string AddAttempt = """
             DECLARE $id AS Utf8;
+            DECLARE $issued AS Timestamp;
+            DECLARE $user AS Utf8;
+            DECLARE $success AS Bool;
 
-            UPDATE
-                account
-            SET
-                attempt = attempt + CAST(1 as Uint8)
+            UPSERT INTO
+                attempts (id, issued, user, success)
+            VALUES
+                ($id, $issued, $user, $success)
+            """;
+        public static string GetAttempts = """
+            DECLARE $user AS Utf8;
+
+            SELECT
+                id, issued, success
+            FROM
+                attempts
             WHERE
-                id = $id;
+                user = $user
+            ORDER BY issued DESC
+            LIMIT 3;
             """;
         public static string SetPasswordHash = """
             DECLARE $id AS Utf8;
@@ -156,13 +170,13 @@
             WHERE
                 issuer = $issuer AND
                 type = $type AND
-                user = $id);
+                user = $id;
             """;
         public static string GetUser = """
             DECLARE $id AS Utf8;
 
             SELECT
-                id, surname, name, lastname, email, phone, gender
+                surname, name, lastname, email, phone, gender
             FROM
                 users
             WHERE 
@@ -172,7 +186,7 @@
             DECLARE $username AS Utf8;
 
             SELECT
-                id, salt, blocked, attempt, username, hash, grant, access
+                id, salt, blocked, attempt, hash, grant, access
             FROM
                 accounts
             WHERE 
@@ -182,7 +196,7 @@
             DECLARE $name AS Utf8;
 
             SELECT
-                name, secret, valid, trust, scopes, callback
+                secret, valid, trust, scope, callback
             FROM
                 clients
             WHERE 
@@ -194,7 +208,7 @@
             DECLARE $valid AS Bool;
             DECLARE $trust AS Bool;
             DECLARE $scopes AS Utf8;
-            DECLARE $callback AS Utf8;
+            DECLARE $callback AS Utf8?;
 
             INSERT INTO
                 clients (name, secret, valid, trust, scopes, callback)
@@ -317,40 +331,39 @@
         public static string CreateIdentity = """
             DECLARE $id As Utf8;
             DECLARE $username AS Utf8;
-            DECLARE $surname AS Utf8;
-            DECLARE $name AS Utf8;
-            DECLARE $lastname AS Utf8;
+            DECLARE $surname AS Utf8?;
+            DECLARE $name AS Utf8?;
+            DECLARE $lastname AS Utf8?;
             DECLARE $hash AS Utf8;
             DECLARE $salt AS Utf8;
-            DECLARE $email AS Utf8;
-            DECLARE $phone AS Uint64;
-            DECLARE $gender AS Utf8;
+            DECLARE $email As Utf8?;
+            DECLARE $phone AS Uint64?;
+            DECLARE $gender AS Utf8?;
             DECLARE $attempt AS Uint8;
             DECLARE $blocked AS Bool;
             DECLARE $grant AS Utf8;
             DECLARE $access AS Timestamp;
 
             INSERT INTO 
-                users (id, surname, name, lastname, email, phone, gender) 
+                users (id, surname, name, lastname, phone, gender, email) 
             VALUES
-                ($id, $surname, $name, $lastname, $email, $phone, $gender);
+                ($id, $surname, $name, $lastname, $phone, $gender, $email);
 
             INSERT INTO 
-                accounts (id, username, hash, salt, attempt, blocked) 
+                accounts (id, username, hash, salt, attempt, blocked, grant, access) 
             VALUES
-                ($id, $username, $hash, $salt, $attempt, $blocked);
-
-            COMMIT;
+                ($id, $username, $hash, $salt, $attempt, $blocked, $grant, $access);
             """;
-        public static string CreateSignIn = """
+        public static string StoreKey = """
             DECLARE $id As Utf8;
             DECLARE $user AS Utf8;
             DECLARE $audience AS Utf8;
+            DECLARE $issued AS Datetime;
 
-            INSERT INTO 
-                keys (id, user, audience) 
+            UPSERT INTO 
+                keys (id, user, audience, issued) 
             VALUES
-                ($id, $user, $audience);
+                ($id, $user, $audience, $issued);
             """;
         public static string DeleteAccount = """
             DECLARE $id As Utf8;
@@ -367,7 +380,7 @@
             DECLARE $issued AS Datetime;
 
             INSERT INTO 
-                accept (client, user, scope, issued) 
+                accepts (client, user, scope, issued) 
             VALUES
                 ($client, $user, $scope, $issued);
             """;

@@ -67,7 +67,13 @@ namespace NAuthAPI.Controllers
             {
                 return Forbid();
             }
-            if (account.Attempts > 2)
+
+            int failedAttempts = 0;
+            foreach(var attempt in await db.GetAttempts(account.Id))
+            {
+                if (!attempt.Success) failedAttempts++;
+            }
+            if (failedAttempts > 2)
             {
                 return Forbid();
             }
@@ -77,19 +83,17 @@ namespace NAuthAPI.Controllers
             {
                 return Forbid();
             }
-            if (!IsHashValid(hash, account.Hash))
+
+            bool success = IsHashValid(hash, account.Hash);
+            if (!await db.AddAttempt(account.Id, success))
             {
-                if (!await db.AddAttempt(account.Id))
-                {
-                    return Problem("Невозможно засчитать попытку входа");
-                }
+                return Problem("Невозможно засчитать попытку входа");
+            }
+            if (!success)
+            {
                 return Unauthorized("Неправильный логин или пароль");
             }
 
-            if (!await db.NullAttempt(account.Id))
-            {
-                return Problem("Невозможно аннулировать попытки входа");
-            }
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
             var key = new SymmetricSecurityKey(payload) { KeyId = keyId };
@@ -150,11 +154,6 @@ namespace NAuthAPI.Controllers
                 {
                     continue;
                 }
-                string claimTypeValue = ScopeHelper.GetClaimValueType(formKey);
-                if (string.IsNullOrEmpty(claimTypeValue))
-                {
-                    continue;
-                }
                 var value = form[formKey].First();
                 if (string.IsNullOrEmpty(value))
                 {
@@ -162,18 +161,19 @@ namespace NAuthAPI.Controllers
                 }
                 if (value.Length > 128)
                 {
-                    throw new Exception("Превышение ограничения символов для атрибута");
+                    throw new Exception($"Превышение ограничения символов для атрибута {formKey}");
                 }
             }
-
+            string? phone_str = form["phone"].FirstOrDefault();
+            ulong? phone = phone_str != null ? ulong.Parse(phone_str) : null;
             User user = new(id,
-                form["surname"].First(),
-                form["name"].First(),
-                form["lastname"].First(),
-                form["email"].First(),
-                ulong.Parse(form["phone"].First() ?? "0"),
-                form["gender"].First());
-            Account account = new(id, username, hash, salt, false, 0, "user", DateTime.MaxValue);
+                form["surname"].FirstOrDefault(),
+                form["name"].FirstOrDefault(),
+                form["lastname"].FirstOrDefault(),
+                form["email"].FirstOrDefault(),
+                phone,
+                form["gender"].FirstOrDefault());
+            Account account = new(id, username, hash, salt, false, 0, "user", DateTime.Now.AddYears(1));
 
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
@@ -244,6 +244,7 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Запрос не найден в базе данных");
             }
+
             byte[] hashVerifier = HashCode(verifier);
             if (!IsHashValid(hashVerifier, Encoding.UTF8.GetBytes(request.Verifier)))
             {

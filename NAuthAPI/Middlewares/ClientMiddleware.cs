@@ -13,7 +13,7 @@ namespace NAuthAPI
     {
         private readonly RequestDelegate _next = next;
 
-        public async Task InvokeAsync(HttpContext httpContext, YDBAppContext database)
+        public async Task InvokeAsync(HttpContext httpContext, IAppContext database)
         {
             var endpoint = httpContext
                 ?.GetEndpoint()

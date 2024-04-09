@@ -12,6 +12,7 @@ using Ydb.Sdk.Auth;
 using Ydb.Sdk.Services.Table;
 using Ydb.Sdk.Yc;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Ydb.Sdk.Services.Scheme;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddEnvironmentVariables();
@@ -30,7 +31,7 @@ string? vaultEndpoint = builder.Configuration["VaultEndpoint"];
 ICredentialsProvider provider;
 Driver? driver = null;
 TableClient? tableClient = null;
-YDBAppContext? database = null;
+IAppContext? database = null;
 
 if (!string.IsNullOrEmpty(key)) //Используем авторизованный ключ доступа если он задан
 {
@@ -59,8 +60,17 @@ for(int i = 0; i < 10; i++) //переподключение
 
 if (driver != null)
 {
+    //var schemeClient = new SchemeClient(driver); библиотека на данный момент не поддерживает полноценную работу с директориями
     tableClient = new TableClient(driver, new TableClientConfig());
     database = new YDBAppContext(tableClient, stage, databasePath);
+    var table = await tableClient.DescribeTable($"NAuth/{stage}/users");
+    if (!table.Status.IsSuccess)
+    {
+        if (!await database.CreateTables())
+        {
+            throw new Exception("Невозможно создать таблицы");
+        }
+    }
 }
 else
 {

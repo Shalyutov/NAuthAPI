@@ -42,7 +42,7 @@ namespace NAuthAPI.Controllers
                 });
             }
             Dictionary<string, object> claims = [];
-            foreach (var claim in ScopeHelper.Scopes)
+            foreach (var claim in scope.Split(" "))//rethink
             {
                 if (string.IsNullOrEmpty(claim))
                 {
@@ -59,7 +59,7 @@ namespace NAuthAPI.Controllers
                     "id" => id,
                     _ => null
                 };
-                if (scope.Contains("user") || scope.Contains($"user:{claim}") || scope.Contains($"user:{claim}:get"))
+                if (scope.Contains($"user:{claim}") || scope.Contains($"user:{claim}:get"))
                 {
                     if (value != null)
                     {

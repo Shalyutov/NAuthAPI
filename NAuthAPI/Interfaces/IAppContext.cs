@@ -2,6 +2,8 @@
 {
     public interface IAppContext
     {
+        public Task<bool> CreateTables();
+
         #region Account Data
         public Task<Account?> GetAccount(string username);
         public Task<User?> GetUser(string id);
@@ -28,8 +30,8 @@
         #endregion
 
         #region User Security
-        public Task<bool> NullAttempt(string user);
-        public Task<bool> AddAttempt(string user);
+        public Task<List<Attempt>> GetAttempts(string user);
+        public Task<bool> AddAttempt(string user, bool success);
         public Task<bool> SetPasswordHash(string id, byte[] hash);
         #endregion
 
