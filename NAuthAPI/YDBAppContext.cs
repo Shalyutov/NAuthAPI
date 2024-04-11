@@ -28,6 +28,15 @@ namespace NAuthAPI
             });
             return response.Status.IsSuccess;
         }
+        public async Task<bool> DropTables()
+        {
+            string pathPrefix = $"PRAGMA TablePathPrefix = \"{_path}/NAuth/{_stage}\";";
+            var response = await client.SessionExec(async session =>
+            {
+                return await session.ExecuteSchemeQuery(pathPrefix + YdbQueries.DropAllTables);
+            });
+            return response.Status.IsSuccess;
+        }
         #region Account Data
         public async Task<Account?> GetAccount(string username)
         {
@@ -37,7 +46,10 @@ namespace NAuthAPI
             };
             var queryResponse = await ExecuteQuery(YdbQueries.GetAccount, parameters);
             var sets = queryResponse.Result.ResultSets;
-            if (sets.Count == 0) return null;
+            if (sets.Count == 0)
+            {
+                throw new Exception("Пустой ответ от базы данных");
+            }
             if (sets[0].Rows.Count == 0) return null;
             
             var row = sets[0].Rows[0];
@@ -46,11 +58,10 @@ namespace NAuthAPI
             string hash = row["hash"].GetUtf8();
             string salt = row["salt"].GetUtf8();
             bool blocked = row["blocked"].GetBool();
-            byte attempt = row["attempt"].GetUint8();
             string grant = row["grant"].GetUtf8();
             DateTime access = row["access"].GetOptionalTimestamp() ?? DateTime.MaxValue;
 
-            Account account = new(id, username, Convert.FromBase64String(hash), Convert.FromBase64String(salt), blocked, attempt, grant, access);
+            Account account = new(id, username, Convert.FromBase64String(hash), Convert.FromBase64String(salt), blocked, grant, access);
             return account;
         }
         public async Task<User?> GetUser(string id)
@@ -66,12 +77,12 @@ namespace NAuthAPI
 
             var row = sets[0].Rows[0];
 
-            string surname = row["surname"].GetUtf8();
-            string name = row["name"].GetUtf8();
-            string lastname = row["lastname"].GetUtf8();
-            string gender = row["gender"].GetUtf8();
-            string email = row["email"].GetUtf8();
-            ulong phone = row["phone"].GetUint64();
+            string? surname = row["surname"].GetOptionalUtf8();
+            string? name = row["name"].GetOptionalUtf8();
+            string? lastname = row["lastname"].GetOptionalUtf8();
+            string? gender = row["gender"].GetOptionalUtf8();
+            string? email = row["email"].GetOptionalUtf8();
+            ulong? phone = row["phone"].GetOptionalUint64();
 
             User user = new(id, surname, name, lastname, email, phone, gender);
             return user;
@@ -106,7 +117,6 @@ namespace NAuthAPI
                 { "$salt",      YdbValue.MakeUtf8(Convert.ToBase64String(account.Salt)) },
                 { "$gender",    YdbValue.MakeOptionalUtf8(user.Gender) },
                 { "$phone",     YdbValue.MakeOptionalUint64(user.Phone) },
-                { "$attempt",   YdbValue.MakeUint8(account.Attempts) },
                 { "$blocked",   YdbValue.MakeBool(account.IsBlocked) },
                 { "$grant",     YdbValue.MakeUtf8(account.Grant) },
                 { "$access",    YdbValue.MakeTimestamp(account.Access) }
@@ -334,7 +344,7 @@ namespace NAuthAPI
             }
             foreach (var row in sets[0].Rows)
             {
-                result.Add(row["scope"].GetOptionalUtf8() ?? "");
+                result.Add(row["scope"].GetUtf8() ?? "");
             }
             return result;
         }
@@ -388,25 +398,25 @@ namespace NAuthAPI
             }
             return claims;
         }
-        public async Task<bool> SetClaim(string user, string issuer, string type, string value)
+        public async Task<bool> SetClaim(string user, string issuer, string scope, string value)
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
                 { "$id", YdbValue.MakeUtf8(user) },
                 { "$issuer", YdbValue.MakeUtf8(issuer) },
-                { "$type", YdbValue.MakeUtf8(type) },
+                { "$scope", YdbValue.MakeUtf8(scope) },
                 { "$value", YdbValue.MakeUtf8(value) },
             };
             var response = await ExecuteQuery(YdbQueries.SetClaim, parameters);
             return response.Status.IsSuccess;
         }
-        public async Task<bool> DeleteClaim(string user, string issuer, string type)
+        public async Task<bool> DeleteClaim(string user, string issuer, string scope)
         {
             var parameters = new Dictionary<string, YdbValue>()
             {
                 { "$id", YdbValue.MakeUtf8(user) },
                 { "$issuer", YdbValue.MakeUtf8(issuer) },
-                { "$type", YdbValue.MakeUtf8(type) }
+                { "$scope", YdbValue.MakeUtf8(scope) }
             };
             var response = await ExecuteQuery(YdbQueries.DeleteClaim, parameters);
             return response.Status.IsSuccess;

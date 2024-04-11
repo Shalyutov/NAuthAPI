@@ -20,14 +20,18 @@ namespace NAuthAPI.Controllers
         [HttpGet("account")]
         public async Task<ActionResult> GetAccount()
         {
-            string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-            string scope = HttpContext.User.FindFirst("scope")?.Value ?? "";
+            string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? throw new Exception("Нет идентификатора пользователя");
+            string? scope = HttpContext.User.FindFirst("scope")?.Value;
+            if (string.IsNullOrEmpty(scope))
+            {
+                return NoContent();
+            }
+
             User? user = await db.GetUser(id);
             if (user == null)
             {
                 return NoContent();
             }
-
             if (scope == "user")
             {
                 return Ok(new

@@ -21,17 +21,15 @@ string? key = builder.Configuration["AuthKey"];
 string endpoint = builder.Configuration["Endpoint"] ?? throw new Exception("Настройки должны содержать эндпоинт базы данных");
 string databasePath = builder.Configuration["Database"] ?? throw new Exception("Настройки должны содержать путь до базы данных");
 string stage = builder.Environment.EnvironmentName;
-
 string issuer = builder.Configuration["Issuer"] ?? "NAuth API";
-string audience = builder.Configuration["Audience"] ?? "NAuth App";
 
 string? vaultAuth = builder.Configuration["VaultAuth"];
 string? vaultEndpoint = builder.Configuration["VaultEndpoint"];
 
 ICredentialsProvider provider;
 Driver? driver = null;
-TableClient? tableClient = null;
-IAppContext? database = null;
+TableClient tableClient;
+IAppContext database;
 
 if (!string.IsNullOrEmpty(key)) //Используем авторизованный ключ доступа если он задан
 {
@@ -138,7 +136,6 @@ builder.Services.AddSingleton(database);
 builder.Services.AddSingleton(kvService);
 builder.Services.AddHealthChecks()
     .AddTypeActivatedCheck<DatabaseHealthCheck>("Database", HealthStatus.Unhealthy, new object[] {database} );
-
 
 var app = builder.Build();
 

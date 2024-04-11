@@ -42,7 +42,13 @@ namespace NAuthAPI.Controllers
         readonly string audience = configuration["Audience"] ?? "NAuth App";
 
         #region Endpoints Logic
-
+        /// <summary>
+        /// Выполняет вход пользователя с предоставленными атрибутами аутентификации от имени доверенного клиентского приложения
+        /// </summary>
+        /// <param name="username">Имя пользователя</param>
+        /// <param name="password">Пароль пользователя</param>
+        /// <returns>Возвращает токен обновления для доступа на специальные конечные точки</returns>
+        /// <exception cref="Exception"></exception>
         [TrustClient]
         [AllowAnonymous]
         [HttpPost("signin")]
@@ -173,7 +179,7 @@ namespace NAuthAPI.Controllers
                 form["email"].FirstOrDefault(),
                 phone,
                 form["gender"].FirstOrDefault());
-            Account account = new(id, username, hash, salt, false, 0, "user", DateTime.Now.AddYears(1));
+            Account account = new(id, username, hash, salt, false, "user", DateTime.Now.AddYears(1));
 
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
@@ -211,7 +217,7 @@ namespace NAuthAPI.Controllers
             }
             string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
             
-            string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? "";
+            string user = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? throw new Exception("В токене не представлен идентификатор пользователя");
 
             string keyId = Guid.NewGuid().ToString();
             byte[] payload = _kvService.CreateKey(keyId);
@@ -234,7 +240,7 @@ namespace NAuthAPI.Controllers
         }
         [Client]
         [AllowAnonymous]
-        [HttpPost("token")]
+        [HttpPost("authorize")]
         public async Task<ActionResult> CreateToken([FromForm] string code, [FromForm] string verifier)
         {
             string client = (string?)HttpContext.Items["client"] ?? throw new Exception("Нет объекта клиентского приложения");
@@ -368,7 +374,7 @@ namespace NAuthAPI.Controllers
         }
         [TrustClient]
         [HttpPost("flow")]
-        public async Task<ActionResult> CreateAuthorizationFlow([FromForm] string code_verifier, [FromForm] string scope, [FromForm] string client)
+        public async Task<ActionResult> CreateFlow([FromForm] string code_verifier, [FromForm] string scope, [FromForm] string client)
         {
             if (!await ClientValidator.IsValidClient(db, client))
             {

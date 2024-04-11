@@ -9,7 +9,6 @@
                 id Utf8 NOT NULL,
                 hash Utf8 NOT NULL,
                 salt Utf8 NOT NULL,
-                attempt Uint8 NOT NULL,
                 blocked Bool NOT NULL,
                 grant Utf8 NOT NULL,
                 access Timestamp?,
@@ -62,6 +61,8 @@
                 issued Datetime NOT NULL,
                 user Utf8 NOT NULL,
                 PRIMARY KEY (id)
+            ) WITH (
+                TTL = Interval("P7D") ON issued
             );
 
             CREATE TABLE scopes
@@ -104,7 +105,7 @@
             );
             """;
         public static string DropAllTables = """
-            DROP TABLE accept;
+            DROP TABLE accepts;
             DROP TABLE claims;
             DROP TABLE clients;
             DROP TABLE keys;
@@ -151,25 +152,25 @@
             """;
         public static string SetClaim = """
             DECLARE $id AS Utf8;
-            DECLARE $type AS Utf8;
+            DECLARE $scope AS Utf8;
             DECLARE $value AS Utf8;
             DECLARE $issuer AS Utf8;
 
             UPSERT INTO
-                claims (issuer, type, value, user)
+                claims (issuer, scope, value, user)
             VALUES
-                ($issuer, $type, $value, $id);
+                ($issuer, $scope, $value, $id);
             """;
         public static string DeleteClaim = """
             DECLARE $id AS Utf8;
-            DECLARE $type AS Utf8;
+            DECLARE $scope AS Utf8;
             DECLARE $issuer AS Utf8;
 
             DELETE FROM
                 claims
             WHERE
                 issuer = $issuer AND
-                type = $type AND
+                scope = $scope AND
                 user = $id;
             """;
         public static string GetUser = """
@@ -186,7 +187,7 @@
             DECLARE $username AS Utf8;
 
             SELECT
-                id, salt, blocked, attempt, hash, grant, access
+                id, salt, blocked, hash, grant, access
             FROM
                 accounts
             WHERE 
@@ -339,7 +340,6 @@
             DECLARE $email As Utf8?;
             DECLARE $phone AS Uint64?;
             DECLARE $gender AS Utf8?;
-            DECLARE $attempt AS Uint8;
             DECLARE $blocked AS Bool;
             DECLARE $grant AS Utf8;
             DECLARE $access AS Timestamp;
@@ -350,9 +350,9 @@
                 ($id, $surname, $name, $lastname, $phone, $gender, $email);
 
             INSERT INTO 
-                accounts (id, username, hash, salt, attempt, blocked, grant, access) 
+                accounts (id, username, hash, salt, blocked, grant, access) 
             VALUES
-                ($id, $username, $hash, $salt, $attempt, $blocked, $grant, $access);
+                ($id, $username, $hash, $salt, $blocked, $grant, $access);
             """;
         public static string StoreKey = """
             DECLARE $id As Utf8;
@@ -413,7 +413,7 @@
             SELECT 
                 scope
             FROM
-                accept
+                accepts
             WHERE
                 user = $user
                 AND client = $client;
