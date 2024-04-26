@@ -73,6 +73,10 @@ namespace NAuthAPI.Controllers
             {
                 return Forbid();
             }
+            if (DateTime.Now > account.Access)
+            {
+                return Forbid();
+            }
 
             int failedAttempts = 0;
             foreach(var attempt in await db.GetAttempts(account.Id))
@@ -83,7 +87,7 @@ namespace NAuthAPI.Controllers
             {
                 return Forbid();
             }
-
+            
             byte[] hash = await HashPassword(password, account.Id, account.Salt);
             if (account.Hash == null)
             {
@@ -191,9 +195,14 @@ namespace NAuthAPI.Controllers
             {
                 return Problem("Не удалось зарегистрировать пользователя");
             }
-            if (!await db.CreateAccept(id, client, "user reset delete"))
+
+            List<string> scopes = ["user", "reset", "delete", "accept"];
+            foreach(string scope in scopes)
             {
-                return Problem("Не удалось присвоить основные разрешения на управление учётной записью пользователя");
+                if (!await db.CreateAccept(id, client, scope))
+                {
+                    return Problem("Не удалось присвоить основные разрешения на управление учётной записью пользователя");
+                }
             }
             if (await db.CreateAuthKey(key.KeyId, audience, id))
             {
@@ -229,6 +238,8 @@ namespace NAuthAPI.Controllers
 
             StringBuilder validScopes = new();
             List<string> acceptedScopes = await db.GetAccepts(user, client);
+            acceptedScopes.Remove("reset");
+            acceptedScopes.Remove("delete");
             validScopes.AppendJoin(" ", acceptedScopes);
 
             var result = new
@@ -271,6 +282,8 @@ namespace NAuthAPI.Controllers
             
             StringBuilder validScopes = new();
             List<string> acceptedScopes = await db.GetAccepts(request.User, client);
+            acceptedScopes.Remove("reset");
+            acceptedScopes.Remove("delete");
             validScopes.AppendJoin(" ", acceptedScopes);
 
             var result = new
@@ -315,13 +328,24 @@ namespace NAuthAPI.Controllers
                 return Problem("Новый ключ подписи не создан в базе данных");
             }
 
-            StringBuilder validScopes = new();
+            string? scope = null;
             List<string> acceptedScopes = await db.GetAccepts(user, client);
-            validScopes.AppendJoin(" ", acceptedScopes.Intersect(["reset"]));
-
+            foreach(var acceptedScope in acceptedScopes)
+            {
+                if (acceptedScope == "reset")
+                {
+                    scope = "reset";
+                    break;
+                }
+            }
+            if (string.IsNullOrEmpty(scope))
+            {
+                return BadRequest("Нет разрешения на сброс пароля");
+            }
+            
             var result = new
             {
-                access_token = CreateAccessToken(user, key, validScopes.ToString(), client),
+                access_token = CreateAccessToken(user, key, scope, client),
                 refresh_token = CreateRefreshToken(user, key, client)
             };
             return Ok(result);
@@ -361,13 +385,24 @@ namespace NAuthAPI.Controllers
                 return Problem("Новый ключ подписи не создан в базе данных");
             }
 
-            StringBuilder validScopes = new();
+            string? scope = null;
             List<string> acceptedScopes = await db.GetAccepts(user, client);
-            validScopes.AppendJoin(" ", acceptedScopes.Intersect(["accept"]));
+            foreach (var acceptedScope in acceptedScopes)
+            {
+                if (acceptedScope == "accept")
+                {
+                    scope = "accept";
+                    break;
+                }
+            }
+            if (string.IsNullOrEmpty(scope))
+            {
+                return BadRequest("Нет разрешения на сброс пароля");
+            }
 
             var result = new
             {
-                access_token = CreateAccessToken(user, securityKey, validScopes.ToString(), client),
+                access_token = CreateAccessToken(user, securityKey, scope, client),
                 refresh_token = CreateRefreshToken(user, securityKey, client)
             };
             return Ok(result);
@@ -378,7 +413,7 @@ namespace NAuthAPI.Controllers
         {
             if (!await ClientValidator.IsValidClient(db, client))
             {
-                return BadRequest("Клиентское приложение не авторизовано");
+                return BadRequest("Клиентское приложение заблокировано");
             }
             Request request = new()
             {
@@ -406,11 +441,6 @@ namespace NAuthAPI.Controllers
         public async Task<ActionResult> RevokeToken()
         {
             var auth = await HttpContext.AuthenticateAsync();
-            var scope = auth.Ticket?.Principal?.FindFirstValue("scope") ?? "";
-            if (!scope.Contains("refresh"))
-            {
-                return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
-            }
             var token = auth.Properties?.GetTokens().First().Value;
             var handler = new JwtSecurityTokenHandler();
             var kid = handler.ReadJwtToken(token).Header.Kid;
@@ -425,8 +455,8 @@ namespace NAuthAPI.Controllers
             return Accepted();
         }
         [TrustClient]
-        [HttpGet("accept")]
-        public async Task<ActionResult> AcceptScope([FromQuery] string client, [FromQuery] string scope)
+        [HttpPost("accept")]
+        public async Task<ActionResult> AcceptScope([FromForm] string client, [FromForm] string scope)
         {
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
             string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
@@ -435,24 +465,26 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
 
-            string user_id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-            if (string.IsNullOrEmpty(user_id))
+            string user_id = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? throw new Exception("Токен не содержит идентификационную информацию");
+            if (scope.Length > 256)
             {
-                return BadRequest("Токен не содержит идентификационную информацию");
+                return BadRequest("Превышение ограничения символов в запросе");
             }
 
-            if (await db.CreateAccept(user_id, client, scope))
+            string[] scopes = scope.Split(" ");
+            foreach(var item in scopes)
             {
-                return Accepted();
+                if (!await db.CreateAccept(user_id, client, scope))
+                {
+                    return Problem("Фиксация разрешения в базе данных не произошла");
+                }
             }
-            else
-            {
-                return Problem("Фиксация разрешения в базе данных не произошла");
-            }
+            
+            return Accepted();
         }
         [TrustClient]
         [HttpDelete("accept")]
-        public async Task<ActionResult> RevokeScope([FromQuery] string client, [FromQuery] string scope)
+        public async Task<ActionResult> RevokeScope([FromQuery] string client, [FromQuery] string? scope = null)
         {
             AuthenticateResult authResult = await HttpContext.AuthenticateAsync();
             string tokenScope = authResult.Ticket?.Principal?.FindFirstValue("scope") ?? "";
@@ -460,11 +492,8 @@ namespace NAuthAPI.Controllers
             {
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
-            string user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? "";
-            if (string.IsNullOrEmpty(user))
-            {
-                return BadRequest("Токен не содержит идентификационную информацию");
-            }
+            string user = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? throw new Exception("Токен не содержит идентификационную информацию");
+            
             try
             {
                 if (string.IsNullOrEmpty(scope))
@@ -500,12 +529,8 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
                 
-            var id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value;
-            if (string.IsNullOrEmpty(id)) 
-            {
-                return BadRequest("Нет идентификационной информации в токене");
-            } 
-
+            string id = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? throw new Exception("Нет идентификационной информации в токене");
+            
             var keys = await db.GetUserKeys(id);
             foreach (var key in keys)
             {
@@ -532,12 +557,8 @@ namespace NAuthAPI.Controllers
                 return BadRequest("Полученный токен не предназначен для доступа к этому ресурсу");
             }
 
-            string id = HttpContext.User.FindFirst(ClaimTypes.SerialNumber)?.Value ?? string.Empty;
-            if (string.IsNullOrEmpty(id))
-            {
-                return BadRequest("Нет идентификационной информации в токене");
-            }
-
+            string id = HttpContext.User.FindFirstValue(ClaimTypes.SerialNumber) ?? throw new Exception("Нет идентификационной информации в токене");
+            
             byte[] salt = CreateSalt();
             byte[] hash = await HashPassword(password, id, salt);
             if (await db.SetPasswordHash(id, hash))

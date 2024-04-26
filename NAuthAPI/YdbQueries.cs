@@ -13,6 +13,8 @@
                 grant Utf8 NOT NULL,
                 access Timestamp?,
                 PRIMARY KEY (username)
+            ) WITH (
+                TTL = Interval("P30D") ON access
             );
 
             CREATE TABLE requests
@@ -329,6 +331,16 @@
             WHERE 
                 username = $username;
             """;
+        public static string IsIdExists = """
+            DECLARE $id AS Utf8;
+
+            SELECT
+                username
+            FROM
+                accounts
+            WHERE 
+                id = $id;
+            """;
         public static string CreateIdentity = """
             DECLARE $id As Utf8;
             DECLARE $username AS Utf8;
@@ -372,6 +384,11 @@
                 users
             WHERE
                 id = $id;
+
+            DELETE FROM
+                accounts
+            WHERE
+                id = $id;
             """;
         public static string CreateAccept = """
             DECLARE $client As Utf8;
@@ -379,7 +396,7 @@
             DECLARE $scope AS Utf8;
             DECLARE $issued AS Datetime;
 
-            INSERT INTO 
+            UPSERT INTO 
                 accepts (client, user, scope, issued) 
             VALUES
                 ($client, $user, $scope, $issued);

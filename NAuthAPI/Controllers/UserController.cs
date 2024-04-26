@@ -91,7 +91,7 @@ namespace NAuthAPI.Controllers
                 return NoContent();
             }
         }
-        [Client]
+        [TrustClient]
         [HttpPut("account")]
         public async Task<ActionResult> UpdateAccount()
         {
@@ -150,7 +150,7 @@ namespace NAuthAPI.Controllers
                 await db.DeleteAccept(id, (HttpContext.Items["client"] as Client)?.Name ?? "", item);
             }
 
-            if (await db.DeleteAccount(id))
+            if (await db.DeleteIdentity(id))
             {
                 return Ok();
             }

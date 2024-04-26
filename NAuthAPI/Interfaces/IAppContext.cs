@@ -3,6 +3,7 @@
     public interface IAppContext
     {
         public Task<bool> CreateTables();
+        public Task<bool> DropTables();
 
         #region Account Data
         public Task<Account?> GetAccount(string username);
@@ -13,7 +14,7 @@
         #region Account Management
         public Task<bool> CreateIdentity(Account account, User user);
         public Task<bool> UpdateUser(string id, Dictionary<string, string> claims);
-        public Task<bool> DeleteAccount(string user);
+        public Task<bool> DeleteIdentity(string user);
         #endregion
 
         #region Key Management

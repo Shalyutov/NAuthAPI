@@ -59,6 +59,7 @@ for(int i = 0; i < 10; i++) //переподключение
 if (driver != null)
 {
     //var schemeClient = new SchemeClient(driver); библиотека на данный момент не поддерживает полноценную работу с директориями
+    //TODO Добавить функционал для проверки и создания необходимых директорий
     tableClient = new TableClient(driver, new TableClientConfig());
     database = new YDBAppContext(tableClient, stage, databasePath);
     var table = await tableClient.DescribeTable($"NAuth/{stage}/users");

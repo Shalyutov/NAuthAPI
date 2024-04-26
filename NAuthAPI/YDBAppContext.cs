@@ -40,6 +40,7 @@ namespace NAuthAPI
         #region Account Data
         public async Task<Account?> GetAccount(string username)
         {
+            if (string.IsNullOrEmpty(username)) return null;
             var parameters = new Dictionary<string, YdbValue>
             {
                 { "$username", YdbValue.MakeUtf8(username) }
@@ -66,6 +67,7 @@ namespace NAuthAPI
         }
         public async Task<User?> GetUser(string id)
         {
+            if (string.IsNullOrEmpty(id)) return null;
             var parameters = new Dictionary<string, YdbValue>
             {
                 { "$id", YdbValue.MakeUtf8(id) }
@@ -89,11 +91,27 @@ namespace NAuthAPI
         }
         public async Task<bool> IsUsernameExists(string username)
         {
+            if (string.IsNullOrEmpty(username)) return false;
             var parameters = new Dictionary<string, YdbValue>
             {
                 { "$username", YdbValue.MakeUtf8(username) }
             };
             var queryResponse = await ExecuteQuery(YdbQueries.IsUserExists, parameters);
+            var sets = queryResponse.Result.ResultSets;
+            if (sets.Count == 0)
+            {
+                throw new ApplicationException("Пустой ответ от базы данных");
+            }
+            return sets[0].Rows.Count == 1;
+        }
+        public async Task<bool> IsIdExists(string id)
+        {
+            if (string.IsNullOrEmpty(id)) return false;
+            var parameters = new Dictionary<string, YdbValue>
+            {
+                { "$id", YdbValue.MakeUtf8(id) }
+            };
+            var queryResponse = await ExecuteQuery(YdbQueries.IsIdExists, parameters);
             var sets = queryResponse.Result.ResultSets;
             if (sets.Count == 0)
             {
@@ -166,8 +184,9 @@ namespace NAuthAPI
             var response = await ExecuteQuery(queryBuilder.ToString(), parameters);
             return response.Status.IsSuccess;
         }
-        public async Task<bool> DeleteAccount(string user)
+        public async Task<bool> DeleteIdentity(string user)
         {
+            if (string.IsNullOrEmpty(user)) return false;
             var parameters = new Dictionary<string, YdbValue>()
             {
                 { "$id", YdbValue.MakeUtf8(user) }
@@ -254,7 +273,7 @@ namespace NAuthAPI
             };
             var response = await ExecuteQuery(YdbQueries.GetClient, parameters);
             var sets = response.Result.ResultSets;
-            if (sets.Count == 0) return null;
+            if (sets.Count == 0) throw new Exception("Пустой ответ от базы данных");
             if (sets[0].Rows.Count == 0) return null;
 
             var row = sets[0].Rows[0];
@@ -344,7 +363,7 @@ namespace NAuthAPI
             }
             foreach (var row in sets[0].Rows)
             {
-                result.Add(row["scope"].GetUtf8() ?? "");
+                result.Add(row["scope"].GetUtf8());
             }
             return result;
         }
